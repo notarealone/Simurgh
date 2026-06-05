@@ -20,7 +20,6 @@ Simurgh/
 ├── configs/                 # YAML/JSON experiment configs
 ├── benchmarks/              # Evaluation scripts & metrics
 ├── notebooks/               # Jupyter notebooks for exploration
-├── tests/                   # Unit & integration tests
 ├── app/                     # Web demo (framework TBD)
 ├── pyproject.toml           # Project config (UV, ruff, pytest)
 └── CLAUDE.md                # ← you are here
@@ -31,7 +30,6 @@ Simurgh/
 - **Package manager:** [UV](https://docs.astral.sh/uv/) — `uv add <package>` to add dependencies
 - **Linter / Formatter:** [Ruff](https://docs.astral.sh/ruff/) — configured in `pyproject.toml`
 - **Python:** 3.11 (pinned in `.python-version`)
-- **Tests:** pytest — `uv run pytest`
 - **Lint check:** `uv run ruff check .`
 - **Format:** `uv run ruff format .`
 
@@ -49,7 +47,6 @@ uv sync --extra dev
 
 # Verify setup
 uv run ruff check .
-uv run pytest
 ```
 
 ## Conventions

@@ -43,7 +43,6 @@ src/                 Source code (rag, rl, personalization, data)
 configs/             Experiment configurations
 benchmarks/          Evaluation scripts
 notebooks/           Jupyter notebooks for exploration
-tests/               Unit and integration tests
 app/                 Web demo (framework TBD)
 ```
 
