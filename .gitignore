@@ -216,3 +216,30 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Simurgh project-specific ---
+# Model weights & checkpoints (use Git LFS or DVC for large files)
+*.pt
+*.pth
+*.bin
+*.onnx
+*.safetensors
+checkpoints/
+
+# Data artifacts
+data/raw/
+data/processed/
+
+# ML experiment tracking
+wandb/
+mlruns/
+lightning_logs/
+runs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Manually added
+.claude
+.idea
