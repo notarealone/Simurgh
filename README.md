@@ -23,9 +23,9 @@ I review, understand, and approve every AI-generated suggestion before inclusion
 
 ### Models Used
 
-| Period | Model | Provider | Purpose |
-|---|---|---|---|
-| June 2026 – present | GLM-5.1 | Anthropic (via Claude Code) | Coding, documentation |
+| Period | Model | Provider               | Purpose |
+|---|---|------------------------|---|
+| June 2026 – present | GLM-5.1 | Z.ai (via Claude Code) | Coding, documentation |
 
 Updated as models change.
 
