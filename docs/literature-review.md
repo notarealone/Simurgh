@@ -16,26 +16,26 @@ work below defines the "naive RAG" rung of our [baseline ladder](things-to-consi
   BART generator that marginalizes over retrieved passages, introducing the
   RAG-Sequence and RAG-Token variants and showing that non-parametric memory is easier
   to update than weights. This is the architecture every Simurgh component wraps.
-  → [`lewis-2020-rag.md`](references/lewis-2020-rag.md)
+  → [`retrieval-augmented-generation-for-knowledge-intensive-nlp-tasks.md`](references/retrieval-augmented-generation-for-knowledge-intensive-nlp-tasks.md)
 - **Dense retrieval.** Karpukhin et al. (2020) introduce Dense Passage Retrieval (DPR),
   a dual-encoder trained with contrastive learning that was the first fully neural
   retriever to beat BM25 on open-domain QA. DPR is the conceptual starting point for the
   persona-conditioned query encoder we want to fine-tune.
-  → [`karpukhin-2020-dpr.md`](references/karpukhin-2020-dpr.md)
+  → [`dense-passage-retrieval-for-open-domain-question-answering.md`](references/dense-passage-retrieval-for-open-domain-question-answering.md)
 - **Retrieval-augmented pre-training.** Guu et al. (2020, REALM) treat retrieval as a
   latent variable trained end-to-end during pre-training, with an asynchronously
   refreshed index. The differentiable-retrieval framing informs how a reward signal
   could shape the retriever rather than only the generator.
-  → [`guu-2020-realm.md`](references/guu-2020-realm.md)
+  → [`realm-retrieval-augmented-language-model-pre-training.md`](references/realm-retrieval-augmented-language-model-pre-training.md)
 - **Fusing many passages.** Izacard & Grave (2021, Fusion-in-Decoder) encode retrieved
   passages independently and fuse them in the decoder, scaling answer quality with the
   number of passages. This motivates investing in *retrieval quality* — better passages
   translate directly into better generations.
-  → [`izacard-2021-fid.md`](references/izacard-2021-fid.md)
+  → [`leveraging-passage-retrieval-with-generative-models-for-open-domain-question-answering.md`](references/leveraging-passage-retrieval-with-generative-models-for-open-domain-question-answering.md)
 - **A map of the field.** Gao et al. (2024) survey RAG for LLMs and give the
   Naive → Advanced → Modular RAG taxonomy that scaffolds our baseline ladder and frames
   query rewriting / retriever tuning as "Advanced RAG" modules.
-  → [`gao-2024-rag-survey.md`](references/gao-2024-rag-survey.md)
+  → [`retrieval-augmented-generation-for-large-language-models-a-survey.md`](references/retrieval-augmented-generation-for-large-language-models-a-survey.md)
 
 **Limitations that motivate this thesis.** None of the foundational systems condition
 on *who is asking*. Retrieval and generation are identical for a struggling ninth-grader
@@ -51,12 +51,12 @@ Two component-level papers seed the parts of the pipeline Simurgh actually modif
   dense, sparse, and multi-vector retrieval across 100+ languages up to 8k tokens — the
   leading candidate backbone for a Persian index. Persian-specific quality still needs
   verifying (MIRACL is multilingual but not Persian-focused), and the multi-vector mode
-  may be too heavy for Kaggle. → [`chen-2024-bge-m3.md`](references/chen-2024-bge-m3.md)
+  may be too heavy for Kaggle. → [`bge-m3-embedding-multi-lingual-multi-functionality-multi-granularity-text-embeddings-through-self-knowledge-distillation.md`](references/bge-m3-embedding-multi-lingual-multi-functionality-multi-granularity-text-embeddings-through-self-knowledge-distillation.md)
 - **Query rewriting.** Ma et al. (2023) propose Rewrite-Retrieve-Read, a small trainable
   rewriter optimized with RL from reader feedback — the direct architectural precedent
   for Simurgh's Query Rewriter. We extend it by conditioning rewrites on a learner
   profile and swapping online RL for offline DPO over LLM-judge preference pairs.
-  → [`ma-2023-query-rewriting.md`](references/ma-2023-query-rewriting.md)
+  → [`query-rewriting-for-retrieval-augmented-large-language-models.md`](references/query-rewriting-for-retrieval-augmented-large-language-models.md)
 
 - [x] Summarize original RAG paper (Lewis et al., 2020) and key follow-ups
 - [x] Cover standard pipeline components: retriever, generator, how they connect
@@ -98,14 +98,14 @@ transfers cleanly to deciding how to retrieve based on the *learner*.
 - **Self-RAG** (Asai et al., 2024, ICLR) trains one LM to retrieve on demand and critique
   its own output via reflection tokens. The teacher-generated critique recipe is a model
   for how Simurgh's LLM-as-simulator can generate persona-fit preference pairs.
-  → [`asai-2024-self-rag.md`](references/asai-2024-self-rag.md)
+  → [`self-rag-learning-to-retrieve-generate-and-critique-through-self-reflection.md`](references/self-rag-learning-to-retrieve-generate-and-critique-through-self-reflection.md)
 - **Adaptive-RAG** (Jeong et al., 2024, NAACL) routes queries to no/single/multi-step
   retrieval by predicted complexity. Swap "complexity" for "persona" and it becomes a
   per-learner retrieval-strategy selector — a direct analogue for Simurgh.
-  → [`jeong-2024-adaptive-rag.md`](references/jeong-2024-adaptive-rag.md)
+  → [`adaptive-rag-learning-to-adapt-retrieval-augmented-large-language-models-through-question-complexity.md`](references/adaptive-rag-learning-to-adapt-retrieval-augmented-large-language-models-through-question-complexity.md)
 - **CRAG** (Yan et al., 2024) adds a lightweight retrieval evaluator that triggers
   correction/filtering when evidence is weak. The evaluator pattern suggests a
-  persona-aware retrieval-quality gate. → [`yan-2024-crag.md`](references/yan-2024-crag.md)
+  persona-aware retrieval-quality gate. → [`corrective-retrieval-augmented-generation.md`](references/corrective-retrieval-augmented-generation.md)
 
 - [x] Summarize Self-RAG, Adaptive-RAG, CRAG (FLARE still TODO)
 - [x] Identify which ideas transfer to a personalization setting

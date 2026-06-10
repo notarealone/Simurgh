@@ -15,7 +15,7 @@ Karpukhin et al. show that dense retrieval via a lightweight dual-encoder framew
 
 - Demonstrates that a simple dual-encoder trained on QA pairs beats BM25 without requiring any extra pre-training signals beyond standard supervised contrastive learning.
 - Introduces the in-batch negative training strategy, which scales efficiently and avoids the need for explicit hard negative mining in the basic setup.
-- Provides the retriever backbone that was directly adopted in the RAG framework ([[lewis-2020-rag]]).
+- Provides the retriever backbone that was directly adopted in the RAG framework ([[retrieval-augmented-generation-for-knowledge-intensive-nlp-tasks]]).
 - Shows that the gap between dense and sparse retrieval is largest when queries are paraphrases or when lexical overlap between question and answer passage is low — motivating learned query representations.
 - End-to-end QA using DPR + a reader achieves strong results on Natural Questions, TriviaQA, WebQuestions, and CuratedTREC.
 
