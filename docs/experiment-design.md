@@ -23,14 +23,17 @@
 
 ## Metrics
 
-<!-- Retrieval: Recall@K, MRR, NDCG -->
-<!-- Generation: ROUGE, BLEU, faithfulness, relevance -->
-<!-- Personalization: user satisfaction, preference alignment -->
+Personalization is the thesis claim, so **persona alignment / pedagogical quality is the primary metric**. EM/F1 measure answer-string correctness — two equally "correct" answers can suit very different students — so report them as **secondary** evidence alongside retrieval metrics.
 
-- [ ] Define retrieval metrics (Recall@K, MRR) per persona
-- [ ] Define generation metrics (Exact Match, F1, ROUGE/BLEU)
-- [ ] Define personalization metrics (LLM-as-judge, human evaluation)
-- [ ] Decide primary vs. secondary metrics
+**Primary — personalization quality**
+- [ ] LLM-as-judge rubric score (persona fit + pedagogical quality + faithfulness) on a held-out set
+- [ ] Human evaluation on a 50–100 sample to confirm judge scores track real pedagogical quality
+
+**Secondary — correctness & retrieval**
+- [ ] Generation correctness: Exact Match, F1 (and ROUGE/BLEU where a reference answer exists)
+- [ ] Retrieval quality per persona: Recall@K, MRR
+
+> **Judge independence:** the judge that *scores* final results must not be the same prompt/model that *generated* the DPO preference pairs, or the numbers partly measure "optimizing to the judge." See [[things-to-consider]] (Reward Signal).
 
 ## Evaluation Protocol
 

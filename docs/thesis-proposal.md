@@ -27,4 +27,5 @@ C – Project Implementation Methodology:
 
 4. Evaluation and Validation
    * Create a dataset of Persian textbook questions with diverse user profiles (beginner, advanced, challenging).
-   * Compare against standard RAG baselines using Exact Match and F1.
+   * *Primary metric — persona alignment / pedagogical quality:* scored by an LLM-as-judge rubric and validated against a human-evaluated sample. EM and F1 measure answer-string correctness, not learner fit — two equally correct answers can serve very different students.
+   * *Secondary metrics — correctness and retrieval:* Exact Match and F1 against standard RAG baselines, plus retrieval quality (Recall@K, MRR) per persona.

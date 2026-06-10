@@ -25,6 +25,7 @@ I review, understand, and approve every AI-generated suggestion before inclusion
 
 | Period | Model | Provider               | Purpose |
 |---|---|------------------------|---|
+| June 2026 – present | Claude Opus 4.8 / Sonnet 4.6 | Anthropic (via Claude Code) | Coding, documentation, architecture |
 | June 2026 – present | GLM-5.1 | Z.ai (via Claude Code) | Coding, documentation |
 
 Updated as models change.
