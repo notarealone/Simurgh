@@ -65,17 +65,46 @@ Two component-level papers seed the parts of the pipeline Simurgh actually modif
 ## RL for Information Retrieval
 
 <!-- RL applied to retrieval, ranking, and query reformulation. -->
-Seeded by Ma et al. (2023), whose rewriter is trained with RL on reader feedback. Next
-batch should add RL-based retriever/reranker optimization and learning-to-rank.
+Seeded by Ma et al. (2023), whose rewriter is trained with RL on reader feedback. The
+2025 wave of RL-with-verifiable-rewards revives that idea with small models and
+retrieval-grounded rewards — the most direct novelty injection for Simurgh's trainable
+rungs.
 
-- [ ] Survey RL-based retrieval optimization methods
-- [ ] Cover query reformulation with RL (have: Ma et al. 2023 — extend with more)
+- **RL query rewriting, no gold rewrites.** Jiang et al. (2025, DeepRetrieval, COLM)
+  train a 3B policy with PPO to emit a `<think>` reasoning trace and then an `<answer>`
+  query, rewarded purely by retrieval outcome (Recall@3K, NDCG@10, or SQL execution
+  accuracy) plus a format term — no supervised rewrites. The 3B model more than doubles
+  prior SOTA recall on literature search (65.1% vs 24.7%) and matches GPT-4o/Claude-3.5
+  on evidence-seeking; the reasoning trace is load-bearing (recall falls to 51.9%
+  without it). This is Ma et al. modernized and the closest precedent for Simurgh's
+  rewriter — with the caveat that its reward is retrieval-only, not persona/pedagogy, so
+  it trains the *retrieval-utility* half of the rewriter, not persona fit.
+  → [`deepretrieval-hacking-real-search-engines-and-retrievers-with-large-language-models-via-reinforcement-learning.md`](references/deepretrieval-hacking-real-search-engines-and-retrievers-with-large-language-models-via-reinforcement-learning.md)
+- **Train the searcher, freeze the generator.** Jiang et al. (2025, s3, EMNLP) train a
+  7B search agent with PPO while leaving the generator frozen, rewarded by *Gain Beyond
+  RAG* — the answer-accuracy lift of the agent's context over naive top-k retrieval
+  (GBR = Acc(G(Q, D_s3)) − Acc(G(Q, D_RAG))). Filtering to questions naive RAG already
+  fails, it reaches Search-R1-level accuracy with 2.4k samples (≈70× less data) and ~33×
+  less compute. The frozen-generator decoupling and the "beat the rung below" reward map
+  almost one-to-one onto Simurgh's constraints (API generator, synthetic data, baseline
+  ladder).
+  → [`s3-you-dont-need-that-much-data-to-train-a-search-agent-via-rl.md`](references/s3-you-dont-need-that-much-data-to-train-a-search-agent-via-rl.md)
+
+- [x] Survey RL-based retrieval optimization methods (DeepRetrieval, s3; retriever-side
+      ROPG under Personalized Retrieval below)
+- [x] Cover query reformulation with RL (Ma et al. 2023; DeepRetrieval 2025)
 - [ ] Cover learning-to-rank approaches relevant to retrieval
 
 ## RL for Text Generation
 
 <!-- RLHF, DPO, PPO-based optimization of LLM outputs. -->
-Not yet covered. Priority for the next batch — the core training method (DPO) lives here.
+The foundational machinery (RLHF/PPO, DPO, RLAIF) is still to be summarized here — it is
+the core training method for Simurgh's rewriter. This batch contributes one applied
+exemplar: Dinucu-Jianu et al. (2025) align a 7B *generator* for tutoring with GRPO and a
+decomposed LLM-judge reward (detailed under Personalized Retrieval and Generation). It
+shows the end-to-end shape of RL-for-generation that Simurgh's preference loop mirrors —
+synthetic interactions, a quality judge, a small policy — and a concrete reason to weigh
+GRPO against DPO for the trainable rungs.
 
 - [ ] Summarize RLHF and PPO-based training for LLMs (Ouyang et al. 2022; Schulman et al. 2017)
 - [ ] Cover DPO and why it's preferred for some use cases (Rafailov et al. 2023)
@@ -84,11 +113,47 @@ Not yet covered. Priority for the next batch — the core training method (DPO) 
 ## Personalized Retrieval and Generation
 
 <!-- User-aware retrieval, preference-tuned generation, personalization in LLMs. -->
-Not yet covered. Next batch — the differentiating contribution of the thesis.
+The differentiating contribution of the thesis, and its closest prior art. Three recent
+papers each personalize one of the three places Simurgh intervenes — the retriever, the
+query, and the generator — but none combine them, and none target Persian educational
+text.
 
-- [ ] Survey user-aware retrieval methods (profile-conditioned, persona embeddings)
-- [ ] Cover preference-tuned generation approaches (e.g., LaMP, personalized DPO)
-- [ ] Review personalization in educational / tutoring systems
+- **Optimizing the retriever for personalization.** Salemi et al. (2024, SIGIR) are the
+  closest precedent: they train a retriever (Contriever) to feed a *frozen* FlanT5-XXL
+  personalized documents, with **ROPG-RL** (REINFORCE; reward = the generated answer's
+  task metric minus a baseline document's), **ROPG-KD** (distil the LLM's per-document
+  utility into the retriever via KL), and **RSPG** (a learned selector that picks the
+  best retriever per query from a pool). RSPG-Post wins on 6/7 LaMP tasks (avg +5.5% over
+  SOTA, +15.3% over a non-personalized LLM). This is the blueprint for Simurgh's
+  RL-optimized retriever — swap the generic task-metric reward for an LLM-judge
+  pedagogical-fit score. Key divergence: LaMP personalizes from each user's *own document
+  history*, whereas Simurgh personalizes from a *declared learner profile* over a shared
+  Persian corpus, and RSPG's per-query selection is a natural analogue to choosing a
+  retrieval strategy per *learner*. → [`optimization-methods-for-personalizing-large-language-models-through-retrieval-augmentation.md`](references/optimization-methods-for-personalizing-large-language-models-through-retrieval-augmentation.md)
+- **Personalizing the query before retrieval.** Zhang et al. (2025, PBR) personalize
+  *before* retrieving, training-free: **P-PRF** prompts an LLM to generate pseudo-feedback
+  in the user's own expression style, and **P-Anchor** runs Personalized PageRank over a
+  graph of the user's corpus to anchor the query in their semantics. It lifts Recall@5
+  ~10% on PersonaBench, and ablations show P-PRF carries most of the gain. Because it
+  needs no training, PBR doubles as a recipe for the persona-conditioned rewriter *and* a
+  ready **persona-prompting baseline rung** (ladder step 2) to beat with DPO — though its
+  history/corpus conditioning must be re-grounded on Simurgh's profile schema and made
+  Persian-aware (ZWNJ, ye/ke). → [`personalize-before-retrieve-llm-based-personalized-query-expansion-for-user-centric-retrieval.md`](references/personalize-before-retrieve-llm-based-personalized-query-expansion-for-user-centric-retrieval.md)
+- **Aligning the generator to pedagogy.** Dinucu-Jianu et al. (2025, EMNLP) turn a 7B LLM
+  into a tutor with multi-turn GRPO over *simulated* student–tutor dialogues — no human
+  annotation. The reward `r_sol + λ·(r_ped − 1)` adds a post-dialogue student solve-rate
+  term to an LLM-judge pedagogical term (answer-leakage + helpfulness), with λ tracing an
+  explicit teach-vs-solve Pareto frontier. The 7B tutor matches LearnLM on teaching
+  quality while *preserving* reasoning, where SFT degrades it. Every ingredient — small
+  model, synthetic learners, a decomposed pedagogical reward, an explicit leakage guard —
+  is a template for Simurgh's judge rubric and simulator in the adjacent generation task.
+  → [`from-problem-solving-to-teaching-problem-solving-aligning-llms-with-pedagogy-using-reinforcement-learning.md`](references/from-problem-solving-to-teaching-problem-solving-aligning-llms-with-pedagogy-using-reinforcement-learning.md)
+
+- [x] Survey user-aware retrieval methods (ROPG/RSPG retriever optimization; PBR query
+      personalization)
+- [x] Cover preference-tuned generation approaches (LaMP via Salemi et al.; pedagogical
+      GRPO via Dinucu-Jianu et al.)
+- [x] Review personalization in educational / tutoring systems (Dinucu-Jianu et al. 2025)
 
 ## Adaptive / Self-Reflective RAG
 
@@ -114,14 +179,22 @@ transfers cleanly to deciding how to retrieve based on the *learner*.
 ## Open Questions & Gap Analysis
 
 <!-- What's missing in existing work that this thesis addresses? -->
-Provisional gap (firms up as RL/personalization sections fill in): foundational RAG is
-user-agnostic; adaptive RAG conditions on *question* properties, not *user* properties;
-query rewriting is trained for generic retrieval utility, not for a learner's pedagogical
-needs. Simurgh's contribution is to make the rewriter and retriever **persona-conditioned**
-and to optimize them for **pedagogical quality** (LLM-judge + human-validated) rather than
-answer-string correctness — in **Persian**, a low-resource educational setting absent from
-all the work above.
+With the RL and personalization sections filled, the gap sharpens. Foundational RAG is
+user-agnostic; adaptive RAG (Self-RAG, Adaptive-RAG, CRAG) conditions on *question*
+properties, not *user* properties. Each piece of the closest prior art covers one of
+Simurgh's three intervention points but stops short: Salemi et al. optimize the
+**retriever**, but for a user's *document history* and a generic task metric
+(accuracy/ROUGE), not a *declared learner profile* scored for pedagogy; DeepRetrieval and
+s3 train the **rewriter/searcher** with RL, but reward *retrieval or answer-correctness
+utility*, not persona fit; PBR personalizes the **query** yet is training-free and
+English; the pedagogy work aligns the **generator** for teaching but leaves *retrieval*
+untouched and is English math, not Persian text. None combine persona-conditioned
+**retrieval + rewriting** optimized for **pedagogical quality** (LLM-judge +
+human-validated) over **Persian** educational text — which is precisely Simurgh's
+contribution. The transferable mechanism is a reward in the spirit of s3's
+Gain-Beyond-RAG and the pedagogy paper's `r_sol + λ·r_ped`, but keyed to a learner
+profile and validated rung-by-rung against the baseline ladder.
 
 - [x] Draft initial gap statement from foundations (refine after RL + personalization batches)
-- [ ] Synthesize gaps across all sections once RL and personalization sections are written
-- [ ] State clearly what this thesis contributes that prior work does not
+- [x] Synthesize gaps across all sections once RL and personalization sections are written
+- [x] State clearly what this thesis contributes that prior work does not
