@@ -46,6 +46,10 @@
 ## Open Questions
 
 - [ ] Which Persian textbooks and grade levels to target?
-- [ ] Which retriever as starting point? (multilingual E5, BGE-M3, domain-fine-tuned)
-- [ ] Which generator LLM? (local model vs. API)
 - [ ] Which RL algorithm for retriever? (PPO, DPO, REINFORCE, other)
+- [ ] English vs Persian system prompt — which yields better Persian answers? Both exist as a config-selectable `prompt_variant` (`en` default); compare once the eval harness lands. Expectation: a wash on large API models, a model-specific tradeoff on small/local ones (English aids instruction-following; Persian reduces English leakage).
+
+**Decided**
+
+- *Retriever starting point.* Phase 0 uses lexical BM25 (SQLite FTS5), a baseline simpler than DPR. BGE-M3 dense retrieval stays the target for the trainable rungs; validate it on held-out Persian QA before committing.
+- *Generator access.* One OpenAI-compatible client serves both API models (OpenAI, Google AI Studio) and local servers (LMStudio, llama.cpp); the endpoint and key come from the `OPENAI_BASE_URL` and `OPENAI_API_KEY` environment variables, the model from config. Still open: which small (≤7B) model to fine-tune for the trainable rungs.

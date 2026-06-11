@@ -1,0 +1,24 @@
+# Phase 0 — naive RAG (lexical BM25 retrieval, no personalization).
+seed: 42
+
+knowledge_base:
+  db_path: data/index/demo.db        # build artifact, gitignored
+
+chunking:
+  chunk_size: 800                    # characters per chunk
+  chunk_overlap: 150                 # characters of overlap between chunks
+
+retrieval:
+  top_k: 5
+
+llm:
+  # Endpoint and key come from the OPENAI_BASE_URL and OPENAI_API_KEY env vars (set them
+  # in .env), not here, so switching provider or server never edits the committed config.
+  # One client covers all:
+  #   OpenAI    : https://api.openai.com/v1                                 (model: gpt-4o-mini)
+  #   AI Studio : https://generativelanguage.googleapis.com/v1beta/openai/  (model: gemini-2.0-flash)
+  #   LMStudio  : http://localhost:1234/v1   |   llama.cpp: http://localhost:8080/v1
+  model: gpt-4o-mini
+  temperature: 0.2
+  max_tokens: 800
+  prompt_variant: en                 # prompt language: en | fa (both instruct a Persian answer)

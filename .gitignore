@@ -229,6 +229,8 @@ checkpoints/
 # Data artifacts
 data/raw/
 data/processed/
+data/index/
+*.db
 
 # ML experiment tracking
 wandb/

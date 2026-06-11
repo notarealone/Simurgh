@@ -18,8 +18,12 @@
 
 <!-- What systems will you compare against? -->
 
-- [ ] Define baseline ladder: naive RAG → persona prompting → DPO rewriter → full system
-- [ ] Implement or configure each baseline
+- [x] Define baseline ladder: naive RAG → persona prompting → DPO rewriter → full system
+- Implement or configure each rung:
+  - [x] Rung 0 — naive RAG: lexical BM25 retrieval, `configs/phase0_naive.yaml` (see [[methodology]])
+  - [ ] Rung 1 — RAG + persona prompting
+  - [ ] Rung 2 — RAG + DPO rewriter
+  - [ ] Rung 3 — full system (DPO rewriter + RL-optimized retriever)
 
 ## Metrics
 

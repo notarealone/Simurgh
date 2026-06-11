@@ -28,9 +28,10 @@ Simurgh/
 │   └── data/                # Data loading, preprocessing
 ├── configs/                 # YAML/JSON experiment configs
 ├── benchmarks/              # Evaluation scripts & metrics
-├── notebooks/               # Jupyter notebooks for exploration
+├── notebooks/               # Jupyter notebooks (exploration + demos)
+├── samples/                 # Source documents to ingest (e.g. Persian corpus)
 ├── app/                     # Web demo (framework TBD)
-├── pyproject.toml           # Project config (UV, ruff, pytest)
+├── pyproject.toml           # Project config (UV, ruff)
 └── CLAUDE.md                # ← you are here
 ```
 
@@ -53,6 +54,9 @@ uv sync
 
 # Install dev dependencies
 uv sync --extra dev
+
+# Set up local secrets — API key and LLM endpoint
+cp .env.example .env
 
 # Verify setup
 uv run ruff check .
@@ -84,4 +88,7 @@ This is a thesis, not a product. The goal is a *defensible research claim*, so p
 ### Code & repo
 
 - Source in `src/` imports as `rag` / `rl` / `personalization` / `data`. Add deps with `uv add`; run ruff (`uv run --extra dev ruff check . && uv run --extra dev ruff format .`) before committing.
-- Never commit: model weights, large datasets, `.env`, notebook outputs, `dist/`. Notebooks are for exploration; production code goes in `src/`.
+- **English everywhere in code, comments, and docs.** Persian belongs only in corpus data (`samples/`) and model output; the example queries in notebooks and the `fa` prompt variant are the deliberate exceptions.
+- **Phases are configs, not folders.** Each baseline-ladder rung is a config over the shared `src/` modules (`configs/phase0_naive.yaml`, then `phase1_*`, …) — never `src/phase-N/` directories.
+- **Secrets and the endpoint live in the environment.** `OPENAI_API_KEY` and `OPENAI_BASE_URL` come from `.env`, read only through `src/data/settings.py`; don't touch `os.environ` elsewhere or hard-code a URL. Experiment parameters stay in `configs/*.yaml`.
+- Never commit: model weights, large datasets, the built index (`data/index/`, `*.db`), `.env`, notebook outputs, `dist/`. Notebooks are for exploration; production code goes in `src/`.

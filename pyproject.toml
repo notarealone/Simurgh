@@ -9,7 +9,13 @@ authors = [
     { name = "Alireza Hosseini" },
 ]
 
-dependencies = []
+dependencies = [
+    "hazm>=0.10.0",
+    "openai>=2.41.1",
+    "pypdf>=6.13.2",
+    "python-dotenv>=1.2.2",
+    "pyyaml>=6.0.3",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -56,6 +62,11 @@ select = [
 ]
 ignore = [
     "E501",  # line length handled by formatter
+    # Persian is a first-class language here; ambiguous-unicode checks fire on
+    # nearly every Persian string (e.g. ARABIC ALEF vs LATIN l) as false positives.
+    "RUF001",  # ambiguous char in string
+    "RUF002",  # ambiguous char in docstring
+    "RUF003",  # ambiguous char in comment
 ]
 
 [tool.ruff.lint.isort]
