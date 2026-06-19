@@ -226,8 +226,10 @@ __marimo__/
 *.safetensors
 checkpoints/
 
-# Data artifacts
-data/raw/
+# Data artifacts — track raw source text for reproducibility; ignore derived/large/built.
+data/raw/*
+!data/raw/*.md
+!data/raw/*.txt
 data/processed/
 data/index/
 *.db
