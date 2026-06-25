@@ -1,0 +1,349 @@
+{
+  "exam_title": "امتحانات میان نوبت دوم درس : فارسی نهم",
+  "passages": [],
+  "questions": [
+    {
+      "id": "q1",
+      "number": "۱",
+      "type": "short_answer",
+      "stem": "چو خواهی که نامت بود جاودان / مکن نام نیک بزرگان نهان",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "اگر می‌خواهی که نام تو ماندگار شود، نام نیک افراد بزرگ و نامدار را پنهان نکن."
+      ],
+      "explanation": null,
+      "points": "۰/۷۵",
+      "notes": null
+    },
+    {
+      "id": "q2",
+      "number": "۲",
+      "type": "short_answer",
+      "stem": "همه یکدلانند، یزدان شناس / به نیکی ندارند از بد، هراس",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "همه با هم متحد و خدا شناس هستند، و با نیک نامی از بدی و پلیدی ترسی ندارند."
+      ],
+      "explanation": null,
+      "points": "۰/۷۵",
+      "notes": null
+    },
+    {
+      "id": "q3",
+      "number": "۳",
+      "type": "short_answer",
+      "stem": "به آسمان، ستاره‌های نقره‌فام و ماه که چون ظرفی سیمگون می‌درخشد، می‌نگرم.",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "به آسمان، ستاره‌هایی به رنگ نقره و ماه که مثل ظرفی نقره‌ای می‌درخشد نگاه می‌کنم."
+      ],
+      "explanation": null,
+      "points": "۰/۵",
+      "notes": null
+    },
+    {
+      "id": "q4",
+      "number": "۴",
+      "type": "short_answer",
+      "stem": "فردا جاهیت خواهد بود، چنان که مقرّبان آسمان به تو نازند.",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "روز قیامت به مقام بزرگی خواهی رسید، آنچنان که فرشتگان آسمان به تو افتخار می‌کنند."
+      ],
+      "explanation": null,
+      "points": "۰/۵",
+      "notes": null
+    },
+    {
+      "id": "q5",
+      "number": "۵",
+      "type": "short_answer",
+      "stem": "ابلیس **زَهره** ندارد.",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "جرأت"
+      ],
+      "explanation": null,
+      "points": "۰/۲۵",
+      "notes": null
+    },
+    {
+      "id": "q6",
+      "number": "۶",
+      "type": "short_answer",
+      "stem": "**تلّی** از خاکستر خاموش",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "تپه / بلندی"
+      ],
+      "explanation": null,
+      "points": "۰/۲۵",
+      "notes": null
+    },
+    {
+      "id": "q7",
+      "number": "۷",
+      "type": "short_answer",
+      "stem": "از یک **آبشخور**، مایه‌ور و سیراب می‌شوند.",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "سرچشمه"
+      ],
+      "explanation": null,
+      "points": "۰/۲۵",
+      "notes": null
+    },
+    {
+      "id": "q8",
+      "number": "۸",
+      "type": "short_answer",
+      "stem": "پایش از آن **پویه** در آمد ز دست",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "دویدن"
+      ],
+      "explanation": null,
+      "points": "۰/۲۵",
+      "notes": null
+    },
+    {
+      "id": "q9",
+      "number": "۹",
+      "type": "short_answer",
+      "stem": "مفهوم عبارت «کم‌کم شمع وجودش به خاموشی می‌گرایید» چیست؟",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "در حال مرگ بودن"
+      ],
+      "explanation": null,
+      "points": "۰/۵",
+      "notes": null
+    },
+    {
+      "id": "q10",
+      "number": "۱۰",
+      "type": "short_answer",
+      "stem": "در عبارت «آرام و خندان دیده از جهان فرو بست»، «دیده از جهان فرو بست» کنایه از چیست؟",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "کنایه از مردن"
+      ],
+      "explanation": null,
+      "points": "۰/۵",
+      "notes": null
+    },
+    {
+      "id": "q11",
+      "number": "۱۱",
+      "type": "short_answer",
+      "stem": "در عبارت «ایرانیان همه برای وطن، تن را سپر کرده‌اند» منظور از «تن را سپر کرده‌اند» چیست؟",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "دفاع کردن از وطن"
+      ],
+      "explanation": null,
+      "points": "۰/۵",
+      "notes": null
+    },
+    {
+      "id": "q12",
+      "number": "۱۲",
+      "type": "short_answer",
+      "stem": "منظور از مصراع «جهان سر به سر، زیر دست من است» چیست؟",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "مطیع و رام بودن همه جهان"
+      ],
+      "explanation": null,
+      "points": "۰/۵",
+      "notes": null
+    },
+    {
+      "id": "q13",
+      "number": "۱۳",
+      "type": "short_answer",
+      "stem": "مفهوم عبارت «عمل، به مرد، بزرگ و شریف گردد» چیست؟",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "این انسان است که به شغل و کار ارزش می‌دهد."
+      ],
+      "explanation": null,
+      "points": "۰/۵",
+      "notes": null
+    },
+    {
+      "id": "q14",
+      "number": "۱۴",
+      "type": "fill_blank",
+      "stem": "جدول زیر را کامل کنید.\nفعل: داشتی می‌نوشتی | زمان: ____ | نوع: ____ | شمار: ____ | بن: ____",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "گذشته",
+        "مستمر(جاری)",
+        "دوم شخص مفرد",
+        "نوشت"
+      ],
+      "explanation": null,
+      "points": "۱",
+      "notes": null
+    },
+    {
+      "id": "q15",
+      "number": "۱۵",
+      "type": "short_answer",
+      "stem": "در عبارت زیر، «هسته» گروه اسمی را مشخص کنید.\nهمه بلند شدند.",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "بلند"
+      ],
+      "explanation": null,
+      "points": "۰/۲۵",
+      "notes": null
+    },
+    {
+      "id": "q16",
+      "number": "۱۶",
+      "type": "short_answer",
+      "stem": "نقش دستوری واژه‌ی مشخص شده را بنویسید.\nتا نشود **راز** چو روز آشکار",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "نهاد"
+      ],
+      "explanation": null,
+      "points": "۰/۲۵",
+      "notes": null
+    },
+    {
+      "id": "q17",
+      "number": "۱۷",
+      "type": "short_answer",
+      "stem": "در هر کدام از عبارت‌های زیر، یک آرایه مشخص کنید.\nالف) درخت وجود نصیرالدین.\nب) تیغ آتش خیز «دستان» را نمی‌دیدند.",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "درخت وجود: اضافه تشبیهی",
+        "تلمیح"
+      ],
+      "explanation": null,
+      "points": "۰/۵",
+      "notes": null
+    },
+    {
+      "id": "q18",
+      "number": "۱۸",
+      "type": "short_answer",
+      "stem": "در بیت «جنگ، جنگی نابرابر بود / جنگ، جنگی فوق باور بود» چه آرایه‌ای دیده می‌شود؟",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "تکرار (جنگ)"
+      ],
+      "explanation": null,
+      "points": "۰/۲۵",
+      "notes": null
+    },
+    {
+      "id": "q19",
+      "number": "۱۹",
+      "type": "short_answer",
+      "stem": "یک رابطه‌ی معنوی در بیت زیر مشخص کنید.\n«همی‌خواهم از کردگار جهان / شناسنده‌ی آشکار و نهان»",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "آشکار و نهان: تضاد"
+      ],
+      "explanation": null,
+      "points": "۰/۲۵",
+      "notes": null
+    },
+    {
+      "id": "q20",
+      "number": "۲۰",
+      "type": "short_answer",
+      "stem": "جناس به کار رفته در بیت زیر را مشخص کنید.\n«دریغ است ایران که ویران شود / کنام پلنگان و شیران شود»",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "ایران، ویران، شیران(جناس ناقص اختلافی)"
+      ],
+      "explanation": null,
+      "points": "۰/۵",
+      "notes": null
+    },
+    {
+      "id": "q21",
+      "number": "۲۱",
+      "type": "short_answer",
+      "stem": "به سؤلات زیر پاسخ دهید.\nالف) نویسنده «مخزن‌الاسرار» کیست؟\nب) «بوستان سعدی» دارای چند باب (فصل) است؟\nج) یکی از آثار «عطار نیشابوری» را نام ببرید؟\nد) متن زیر، چه کسی را معرفی می‌کند؟\n«شاعر و نویسنده‌ی معروف ایرانی قرن نهم هجری است. از آثار او می‌توان به «بهارستان» و «هفت اورنگ» اشاره کرد.»",
+      "group_id": null,
+      "options": null,
+      "pairs": null,
+      "items": null,
+      "answer": [
+        "نظامی",
+        "۱۰ باب (فصل)",
+        "الهی نامه / منطق‌الطیر / تذکرةالاولیا / مصیبت نامه",
+        "جامی"
+      ],
+      "explanation": null,
+      "points": "۱",
+      "notes": null
+    }
+  ]
+}
