@@ -12,7 +12,7 @@ The corpus ([[data-extraction]]) is what the RAG system *reads*. The questions d
 
 1. **Collect exam sources.** PDFs / images of exam papers (چهارگزینه‌ای, جای خالی, تشریحی, …). Answer keys are sometimes in the same file, sometimes a separate file, sometimes absent.
 2. **Extract with a VLM.** Feed the exam page images to a vision model with the [prompt below](#vlm-extraction-prompt). It returns **one JSON object per exam**: a `passages` array plus a `questions` array.
-3. **Store raw JSON.** One file per source, e.g. `data/exams/raw/<source-slug>.json`. The filename carries the source identity. Never commit large dataset files (see [[CLAUDE]] repo rules).
+3. **Store raw JSON.** One file per source, e.g. `data/exams/raw/<source-slug>.json`. The filename carries the source identity. Validate every file with `json.loads` before trusting it — a model occasionally emits a raw newline inside a string (`Invalid control character`) or a stray `...`; re-prompt or repair those. Never commit large dataset files (see [[CLAUDE]] repo rules).
 4. **Join answers (when separate).** Where the answer key is a different file, a downstream script matches it to the question rows on `number` (unique within the file) and fills the `answer` field wherever it is `null`.
 5. **Flatten + split.** Scripts read the JSON, flatten to CSV, and produce train/val/test splits **by source** (never by row) so no passage/question crosses splits — the no-leakage rule in [[CLAUDE]] / [[things-to-consider]].
 
@@ -39,8 +39,8 @@ The VLM picks the `type` that best fits each question and follows that type's fi
 | `true_false` | درست / نادرست | `true` or `false` |
 | `short_answer` | کوتاه‌پاسخ / معنی واژه | string (array if several acceptable answers) |
 | `essay` | تشریحی / open-ended | usually `null`; a printed sample answer or rubric goes in `explanation` |
-| `matching` | تطبیق دو ستون | array of `[left_index, right_index]` pairs |
-| `ordering` | مرتب‌کردن | array of `item` indices in correct order |
+| `matching` | تطبیق دو ستون | array of `[left_pos, right_pos]` pairs, 1-based |
+| `ordering` | مرتب‌کردن | array of item positions in correct order, 1-based |
 | `other` | anything else | best-effort; describe shape in `notes` |
 
 **Passage-grouped questions** (a shared متن / reading passage with sub-questions) are kept together: the shared text goes once in the top-level `passages` array, and each sub-question carries the matching `group_id`. Downstream, a group is never split across train/val/test.
@@ -70,7 +70,7 @@ The VLM picks the `type` that best fits each question and follows that type's fi
       "answer": "varies|null",     // see type table; null when not on the page
       "explanation": "string|null",          // worked solution / rubric if printed
 
-      "points": "number|null",     // marks if printed
+      "points": "string|null",     // printed marks, verbatim, e.g. "۰/۲۵" (Persian decimal uses /)
       "notes": "string|null"       // unreadable chars, ambiguities, type=other shape
     }
   ]
@@ -88,6 +88,12 @@ The pages are from a Persian (Farsi) exam. Read every question on every page.
 OUTPUT
 - Output ONLY one JSON object. No commentary, no explanation, no markdown code fences.
 - The object must follow the SCHEMA below exactly. Use null for any field you cannot fill.
+- It MUST be valid JSON that a standard parser accepts. In particular:
+  - Escape every line break inside a string as \n; NEVER put a raw line break inside a string.
+  - Escape any " inside a string as \". Prefer the Persian quotes « » in content.
+  - JSON numbers (e.g. "answer" indices) use ASCII digits only; Persian/Arabic digits appear
+    ONLY inside quoted strings.
+  - No comments, no trailing commas, and never use ... as a value or a placeholder.
 
 FAITHFULNESS
 - Transcribe Persian text EXACTLY as printed. Do NOT translate it. Do NOT normalize it:
@@ -109,13 +115,16 @@ PER QUESTION
   - true_false  : "answer" = true or false.
   - short_answer: "answer" = the expected text (array if several answers are acceptable).
   - essay       : "answer" = null; put any printed sample answer or rubric in "explanation".
-  - matching    : "pairs" = {"left":[...], "right":[...]} in printed order; "answer" =
-                  array of [left_index, right_index] pairs.
-  - ordering    : "items" = the items as presented; "answer" = array of item indices in
-                  the correct order.
+  - matching    : "pairs" = an object with "left" and "right" arrays, in printed order;
+                  "answer" = array of [left_position, right_position] pairs, 1-based.
+  - ordering    : "items" = the items as presented; "answer" = array of item positions,
+                  1-based, in the correct order.
+- ALL positions/indices are 1-based (the first option/item/row is 1, not 0).
   - other       : describe the shape in "notes".
-- Keep all options/items/pairs in their printed order.
-- "points": printed marks for the question, else null.
+- Keep all options/items/pairs in their printed order, and capture EVERY option (do not
+  stop after the first two).
+- "points": the printed marks as a STRING, verbatim (Persian uses / as the decimal
+  separator, e.g. "۰/۲۵"); else null.
 
 PASSAGE-BASED QUESTIONS
 - If several questions share a reading passage (متن), put the passage ONCE in the top-level
@@ -154,10 +163,10 @@ EXAMPLE (shape only)
       "type": "mcq",
       "stem": "در کدام گزینه آرایهٔ «تشبیه» به کار رفته است؟",
       "group_id": null,
-      "options": ["گزینهٔ اول ...", "گزینهٔ دوم ...", "گزینهٔ سوم ...", "گزینهٔ چهارم ..."],
+      "options": ["متن گزینهٔ اول", "متن گزینهٔ دوم", "متن گزینهٔ سوم", "متن گزینهٔ چهارم"],
       "answer": 3,
       "explanation": null,
-      "points": 1,
+      "points": "۱",
       "notes": null
     },
     {
@@ -168,7 +177,7 @@ EXAMPLE (shape only)
       "group_id": null,
       "answer": null,
       "explanation": null,
-      "points": 1,
+      "points": "۱",
       "notes": "answer key not on this page"
     }
   ]
