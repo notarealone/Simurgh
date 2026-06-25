@@ -87,7 +87,10 @@ You extract exam questions from the provided page image(s) into a single JSON ob
 The pages are from a Persian (Farsi) exam. Read every question on every page.
 
 OUTPUT
-- Output ONLY one JSON object. No commentary, no explanation, no markdown code fences.
+- Output ONLY one JSON object, wrapped in a single Markdown fenced code block (a line of three
+  backticks then "json" to open, a line of three backticks to close) and nothing else — no
+  commentary or explanation outside the fence. The code block preserves exact spacing —
+  ordinary spaces and ZWNJ / نیم‌فاصله — so the Persian text is not collapsed when rendered or copied.
 - The object must follow the SCHEMA below exactly. Use null for any field you cannot fill.
 - It MUST be valid JSON that a standard parser accepts. In particular:
   - Escape every line break inside a string as \n; NEVER put a raw line break inside a string.
