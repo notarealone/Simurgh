@@ -170,6 +170,7 @@ SCHEMA
 ```
 
 EXAMPLE (shape only)
+```json
 {
   "exam_title": "آزمون نوبت اول فارسی نهم",
   "passages": [],
@@ -199,6 +200,7 @@ EXAMPLE (shape only)
     }
   ]
 }
+```
 ````
 
 ## Limitations
