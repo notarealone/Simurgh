@@ -82,7 +82,7 @@ The VLM picks the `type` that best fits each question and follows that type's fi
 
 Paste this verbatim alongside the exam page image(s). It is self-contained (schema + per-type rules + an example) because the VLM sees only the prompt.
 
-```text
+````text
 You extract exam questions from the provided page image(s) into a single JSON object.
 The pages are from a Persian (Farsi) exam. Read every question on every page.
 
@@ -146,6 +146,7 @@ PASSAGE-BASED QUESTIONS
   "passages" array with a "group_id", and give each of its questions that same "group_id".
 
 SCHEMA
+```json
 {
   "exam_title": "string|null",
   "passages": [ { "group_id": "string", "text": "string" } ],
@@ -166,6 +167,7 @@ SCHEMA
     }
   ]
 }
+```
 
 EXAMPLE (shape only)
 {
@@ -197,7 +199,7 @@ EXAMPLE (shape only)
     }
   ]
 }
-```
+````
 
 ## Limitations
 
