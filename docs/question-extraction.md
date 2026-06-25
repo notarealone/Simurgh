@@ -26,6 +26,7 @@ The VLM step is not byte-reproducible (a second run of the same page may differ 
 - **The VLM never invents answers.** `answer` is filled **only** if the answer is printed on the page; otherwise `answer: null`. A null is the signal that the answer must be joined in later from a separate key (or does not exist yet).
 - **`number` is the join key.** The printed question number is transcribed verbatim and is unique within the file, so a separate answer-key file is joined on `number`. `id` is a normalized ASCII handle (`q<number>`) for a stable per-row reference after flattening.
 - **Persian content is preserved verbatim.** No ZWNJ / ye-ke / digit normalization at extraction — that is applied consistently downstream in `src/data/persian.py` to both corpus and queries. The VLM transcribes exactly what is printed; it does not translate or silently "correct" the script.
+- **Source emphasis is preserved.** Underlined / bold / highlighted spans — the "بخش مشخص شده" that many questions depend on — are wrapped in Markdown bold (`**…**`) inside the text, so the marked word survives into the dataset. It is the only markup added to otherwise-verbatim text, stays distinct from the `____` blank marker, and downstream can render or strip it.
 - **Splits are not assigned here.** Extraction produces questions only; train/val/test assignment is a separate, source-aware step.
 
 ## Question types
@@ -58,7 +59,7 @@ The VLM picks the `type` that best fits each question and follows that type's fi
       "id": "string",              // normalized handle, "q<number>"
       "number": "string",          // printed question number, VERBATIM (join key)
       "type": "mcq|fill_blank|true_false|short_answer|essay|matching|ordering|other",
-      "stem": "string",            // question text, Persian verbatim; blanks as ____
+      "stem": "string",            // question text, Persian verbatim; blanks as ____, marked spans as **…**
       "group_id": "string|null",   // links to passages[].group_id, else null
 
       // --- type-specific (include only those that apply) ---
@@ -102,6 +103,17 @@ FAITHFULNESS
   and describe the issue in "notes".
 - NEVER invent an answer. Fill "answer" ONLY if the correct answer is printed on the page
   (an answer key, a marked choice, a bolded solution). Otherwise set "answer": null.
+
+MARKED TEXT (underline / bold / highlight)
+- Many questions refer to a "بخش مشخص شده": a word or phrase the source underlines, bolds, or
+  highlights. Preserve that marking inline so the question stays meaningful — wrap the marked
+  span in **double asterisks** exactly where it appears, inside "stem", "options", or a passage.
+  Printed (with بصیرت underlined): «معنی واژهٔ بصیرت را بنویسید»
+  -> "stem": "معنی واژهٔ **بصیرت** را بنویسید".
+- Mark ONLY spans that are actually emphasized in the source; never add emphasis of your own.
+- ** is the only formatting markup allowed; everything else stays a verbatim transcription. Do
+  NOT use underscores for emphasis — underscores are reserved for the blank marker ____.
+- When you mark the span inline, you do not also need to describe it in "notes".
 
 PER QUESTION
 - Copy the printed question number EXACTLY into "number" (this is a join key). Set "id"
@@ -173,7 +185,7 @@ EXAMPLE (shape only)
       "id": "q2",
       "number": "۲",
       "type": "fill_blank",
-      "stem": "جمع واژهٔ «کتاب»، ____ است.",
+      "stem": "جمع واژهٔ **کتاب**، ____ است.",
       "group_id": null,
       "answer": null,
       "explanation": null,
