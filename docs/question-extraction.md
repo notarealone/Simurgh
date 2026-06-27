@@ -1,20 +1,20 @@
 # Question Extraction
 
-> How exam questions are turned into the structured QA dataset that drives evaluation and preference-pair generation. This is the provenance record for the question data — distinct from [[data-extraction]], which covers building the RAG *corpus* from textbook scans. See [[methodology]] and [[experiment-design]] for what the questions feed into downstream (splits, judging, DPO pairs).
+> How exam questions are turned into the structured QA dataset that drives evaluation and preference-pair generation. This is the provenance record for the question data — distinct from [data-extraction](data-extraction.md), which covers building the RAG *corpus* from textbook scans. See [methodology](methodology.md) and [experiment-design](experiment-design.md) for what the questions feed into downstream (splits, judging, DPO pairs).
 
 ---
 
 ## Why this matters
 
-The corpus ([[data-extraction]]) is what the RAG system *reads*. The questions documented here are what it is *tested on* and trained against. They start as exam PDFs — often scanned, sometimes with a separate answer key in a different file — and must become a clean, machine-parseable dataset that scripts split into train/validation/test without leakage. Documenting the path lets a reviewer judge the data and lets me rebuild it the same way later.
+The corpus ([data-extraction](data-extraction.md)) is what the RAG system *reads*. The questions documented here are what it is *tested on* and trained against. They start as exam PDFs — often scanned, sometimes with a separate answer key in a different file — and must become a clean, machine-parseable dataset that scripts split into train/validation/test without leakage. Documenting the path lets a reviewer judge the data and lets me rebuild it the same way later.
 
 ## Pipeline
 
 1. **Collect exam sources.** PDFs / images of exam papers (چهارگزینه‌ای, جای خالی, تشریحی, …). Answer keys are sometimes in the same file, sometimes a separate file, sometimes absent.
 2. **Extract with a VLM.** Feed the exam page images to a vision model with the [prompt below](#vlm-extraction-prompt). It returns **one JSON object per exam**: a `passages` array plus a `questions` array.
-3. **Store raw JSON.** One file per source, e.g. `data/exams/raw/<source-slug>.json`. The filename carries the source identity. Validate every file with `json.loads` before trusting it — a model occasionally emits a raw newline inside a string (`Invalid control character`) or a stray `...`; re-prompt or repair those. Never commit large dataset files (see [[CLAUDE]] repo rules).
+3. **Store raw JSON.** One file per source, e.g. `data/exams/raw/<source-slug>.json`. The filename carries the source identity. Validate every file with `json.loads` before trusting it — a model occasionally emits a raw newline inside a string (`Invalid control character`) or a stray `...`; re-prompt or repair those. Never commit large dataset files (see [CLAUDE](../CLAUDE.md) repo rules).
 4. **Join answers (when separate).** Where the answer key is a different file, a downstream script matches it to the question rows on `number` (unique within the file) and fills the `answer` field wherever it is `null`.
-5. **Flatten + split.** Scripts read the JSON, flatten to CSV, and produce train/val/test splits **by source** (never by row) so no passage/question crosses splits — the no-leakage rule in [[CLAUDE]] / [[things-to-consider]].
+5. **Flatten + split.** Scripts read the JSON, flatten to CSV, and produce train/val/test splits **by source** (never by row) so no passage/question crosses splits — the no-leakage rule in [CLAUDE](../CLAUDE.md) / [things-to-consider](things-to-consider.md).
 
 The VLM step is not byte-reproducible (a second run of the same page may differ slightly). Treat each JSON as a reviewed artifact, not a deterministic build output — spot-check a sample against the source PDF.
 

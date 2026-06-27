@@ -29,3 +29,46 @@ C – Project Implementation Methodology:
    * Create a dataset of Persian textbook questions with diverse user profiles (beginner, advanced, challenging).
    * *Primary metric — persona alignment / pedagogical quality:* scored by an LLM-as-judge rubric and validated against a human-evaluated sample. EM and F1 measure answer-string correctness, not learner fit — two equally correct answers can serve very different students.
    * *Secondary metrics — correctness and retrieval:* Exact Match and F1 against standard RAG baselines, plus retrieval quality (Recall@K, MRR) per persona.
+
+---
+
+## Revision history
+
+The section above is the original proposal and is kept verbatim. Subsequent design
+decisions are recorded here as dated revisions rather than by editing the text above, so the
+proposal's evolution stays auditable. The live, detailed plan lives in [methodology](methodology.md),
+[experiment-design](experiment-design.md), and [things-to-consider](things-to-consider.md).
+
+### v1.1 — 2026-06-26 — scope sharpened to a single RL-trained component
+
+Refines, and in one place narrows, the original Implementation Methodology (section C) after
+weighing it against the project constraints (≈4 weeks, solo, minimal compute, DPO over PPO).
+
+- **Trained component narrowed to the query rewriter.** The persona-conditioned **query
+  rewriter** (original step C.1) is now the *only* RL-trained policy — a small ≤7B model with
+  a LoRA adapter, optimized with **DPO** (the iterative/on-policy variant when affordable).
+  Concentrating training on one component keeps every measured gain attributable.
+- **Retriever optimization (original step C.3) demoted to an optional stretch.** DPO needs a
+  generative policy; an embedding retriever has no token log-probs, so optimizing it requires
+  REINFORCE/ROPG (online RL) or contrastive fine-tuning — both outside the DPO-only core.
+  The retriever is therefore a **frozen backdrop** (BM25 now, BGE-M3 candidate), selected
+  once via Recall@K. Retriever adaptation via REINFORCE/ROPG remains a labelled stretch goal,
+  pursued only if time allows.
+- **Generator is frozen.** A light-but-big API model serves as the (frozen) generator.
+  Whether it *also* receives the learner profile is an **experimental axis** (persona-aware
+  vs persona-blind): a capable persona-aware generator may make the rewriter redundant above
+  some capability threshold — itself a question the experiments probe. Training a *small*
+  generator with DPO is recorded as future work, not core scope.
+- **Reward (step C.2) made concrete.** `retrieval_quality + λ · persona_fit`, where
+  `persona_fit` is an LLM-judge score on the final answer (persona fit + pedagogy +
+  faithfulness) credit-assigned end-to-end, and `retrieval_quality` is an objective anchor
+  guarding against reward hacking. **Judge independence:** the judge that *labels* DPO pairs
+  must differ in family from the judge that *scores* evaluation.
+- **Personalization mechanism decided.** Profile-conditioned query rewriting. A fixed set of
+  **4 personas** over **4 ordinal axes** (Bad / Average / Good / Excellent), stored as the
+  ordinal record but rendered to natural language for the prompt; **3 personas train, 1 is
+  held out for test only** (a generalization claim to an unseen profile).
+- **Evaluation hardened.** Baseline ladder (naive RAG → persona-prompted + untrained
+  rewriter → persona-prompted + DPO rewriter); **paired** significance tests + **bootstrap
+  CIs** over **≥3 seeds**; the test set, judge prompt, and seeds are **frozen and versioned
+  from day one**.

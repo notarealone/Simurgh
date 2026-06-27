@@ -27,5 +27,5 @@ The R3 framework is the direct architectural precedent for Simurgh's Query Rewri
 
 - The paper uses web search as the retriever; Simurgh uses a fixed Persian document index, so retrieval feedback dynamics may differ.
 - RL training here is online (reward from reader at inference); Simurgh uses offline DPO, which avoids the need for live reader rollouts — more practical under limited GPU budget.
-- Reward hacking risk noted by the authors (rewriter gaming the reader metric) is directly relevant: Simurgh must guard against rewrites that score well on the judge prompt but don't genuinely help the learner (see [[methodology]] and [[docs/things-to-consider.md]]).
+- Reward hacking risk noted by the authors (rewriter gaming the reader metric) is directly relevant: Simurgh must guard against rewrites that score well on the judge prompt but don't genuinely help the learner (see [methodology](../methodology.md) and [things-to-consider](../things-to-consider.md)).
 - Open question: how much does the rewriter need to be aware of Persian-specific retrieval signals (ZWNJ normalization, ye/ke variants) vs. relying on the retriever's tokenizer to handle them?

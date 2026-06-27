@@ -74,7 +74,7 @@ This is a thesis, not a product. The goal is a *defensible research claim*, so p
 - **Evaluate honestly.** Primary metric = persona alignment / pedagogical quality (LLM-judge + a human-validated sample); EM/F1 and retrieval metrics are secondary. Report variance over ≥3 seeds and sanity-check significance before claiming an improvement. Hold out a true test set and never tune on it.
 - **Guard the judge.** The judge that *scores* results must not be the judge/prompt that *generated* preference pairs. Spot-check judge scores against human ratings, and watch for reward hacking (a rewriter that games the judge instead of helping the student).
 - **Report the negatives.** Null and negative results stay in the thesis. State limitations; don't cherry-pick the one seed or metric that looks good.
-- **Ground in the literature.** Extend one base paper. Log every paper read in `docs/references/` (one file per paper from `TEMPLATE.md`, registered in `INDEX.md`) and record open decisions + rationale in `docs/things-to-consider.md`. Cross-link docs with `[[wikilinks]]`.
+- **Ground in the literature.** Extend one base paper. Log every paper read in `docs/references/` (one file per paper from `TEMPLATE.md`, registered in `INDEX.md`) and record open decisions + rationale in `docs/things-to-consider.md`. Cross-link docs with **relative-path Markdown links** (e.g. `[methodology](methodology.md)`, or `[two-tales](references/two-tales-….md)` across folders) — these render and click through on GitHub and VS Code. Do **not** use `[[wikilinks]]`; they only resolve in Obsidian-class editors, which this repo isn't set up as.
 
 ### Domain conventions (RAG / RL / personalization)
 

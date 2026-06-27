@@ -1,6 +1,6 @@
 # Data Extraction
 
-> How the raw corpus in `data/raw/` is built from source textbooks. This is the provenance record for every file the RAG index ingests — read it before trusting or rebuilding the corpus. See [[methodology]] for what happens to this text downstream (chunking, indexing, retrieval).
+> How the raw corpus in `data/raw/` is built from source textbooks. This is the provenance record for every file the RAG index ingests — read it before trusting or rebuilding the corpus. See [methodology](methodology.md) for what happens to this text downstream (chunking, indexing, retrieval).
 
 ---
 
