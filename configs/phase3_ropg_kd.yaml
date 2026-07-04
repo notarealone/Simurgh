@@ -1,0 +1,51 @@
+# Phase 3 — BGE-M3 + ROPG-KD trained retriever, untrained rewriter.
+seed: 42
+
+knowledge_base:
+  index_path: data/index/phase1.faiss     # frozen BGE-M3 index used for candidate retrieval
+  meta_path: data/index/phase1_meta.json
+
+embedder:
+  model: Qwen/Qwen3-Embedding-0.6B
+  device: cpu      # scorer uses CPU; change to "cuda" for training on Kaggle
+  batch_size: 32
+
+chunking:
+  chunk_size: 800
+  chunk_overlap: 150
+
+retrieval:
+  top_k: 5
+
+# ── Offline scorer (run first, once) ─────────────────────────────────────────
+scorer:
+  output_path: data/rl/phase3_scored_triples.jsonl  # written by src/rl/scorer.py
+  exam_dir: data/exams/raw
+  top_k: 5   # candidate docs per (query, persona) pair
+  judge_llm:
+    model: gpt-4o-mini     # must differ in family from the eval judge
+    temperature: 0.0       # deterministic scoring
+    max_tokens: 10         # only a number is returned
+
+# ── ROPG-KD training (run on Kaggle/GPU after scoring is complete) ────────────
+ropg_kd:
+  checkpoint_dir: data/rl/ropg_kd_checkpoints   # gitignored
+  device: cuda        # override to "cpu" for testing; use "cuda" for real training
+  epochs: 3
+  batch_size: 8
+  lr: 2.0e-4
+  weight_decay: 0.01
+  kd_temperature: 1.0    # softmax temperature for soft targets and similarity logits
+  lora_r: 8
+  lora_alpha: 16
+  lora_dropout: 0.1
+  lora_target_modules: ["query", "value"]
+
+llm:
+  model: gpt-4o-mini
+  temperature: 0.2
+  max_tokens: 800
+  prompt_variant: en
+
+rewriter:
+  enabled: false   # Phase 3 uses the untrained (prompted) rewriter at inference

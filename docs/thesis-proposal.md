@@ -72,3 +72,27 @@ weighing it against the project constraints (≈4 weeks, solo, minimal compute, 
   rewriter → persona-prompted + DPO rewriter); **paired** significance tests + **bootstrap
   CIs** over **≥3 seeds**; the test set, judge prompt, and seeds are **frozen and versioned
   from day one**.
+
+### v1.2 — 2026-07-03 — retriever promoted to core; 5-rung baseline ladder
+
+Supersedes v1.1's decision to freeze the retriever. Two trained components are now in
+scope:
+
+- **Retriever trained with ROPG-KD (core, not stretch).** The retriever is no longer
+  a frozen backdrop. It is fine-tuned from BGE-M3 using offline knowledge distillation
+  (ROPG-KD): an LLM judge scores each `(query, persona, document)` triple for
+  pedagogical utility, and those scores are distilled into the encoder via KL divergence.
+  This is the offline variant of ROPG-RL (Salemi et al., 2024) — same personalization
+  objective, no online reward loop, compatible with the DPO-only compute constraint.
+- **Baseline ladder expanded to 5 rungs** (was 3):
+  - Rung 0: BM25, no persona (done)
+  - Rung 1: BGE-M3 frozen, no persona
+  - Rung 2: BGE-M3 frozen, persona-prompted untrained rewriter
+  - Rung 3: BGE-M3 + ROPG-KD, untrained rewriter
+  - Rung 4: BGE-M3 + ROPG-KD, DPO rewriter (full system)
+  Rungs 3 vs 4 isolate the rewriter's marginal contribution on top of a trained retriever.
+- **DPO rewriter policy model decided: Gemma-4-E4B + LoRA.** Qwen2.5-3B is the
+  fallback if Persian output quality is insufficient (validated by smoke-testing rewrites
+  before committing to full DPO training).
+- **Training order:** ROPG-KD retriever first (retriever fixed), then DPO rewriter on
+  top — ensures preference pairs for DPO are built against a stable retriever.

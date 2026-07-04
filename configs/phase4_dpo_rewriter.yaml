@@ -1,0 +1,71 @@
+# Phase 4 — BGE-M3 + ROPG-KD retriever + DPO-trained rewriter (full system).
+seed: 42
+
+knowledge_base:
+  # Use the ROPG-KD fine-tuned encoder for inference. Point index_path at the
+  # rebuilt index (after running ropg_kd.py and re-indexing with the KD checkpoint).
+  # For preference-pair generation, the phase1 index is used (pre-KD, same corpus).
+  index_path: data/index/phase3_ropg_kd.faiss
+  meta_path: data/index/phase3_ropg_kd_meta.json
+
+embedder:
+  model: Qwen/Qwen3-Embedding-0.6B
+  # After ROPG-KD: set adapter_path to the saved LoRA checkpoint.
+  adapter_path: data/rl/ropg_kd_checkpoints/ropg_kd_best
+  device: cuda
+  batch_size: 32
+
+chunking:
+  chunk_size: 800
+  chunk_overlap: 150
+
+retrieval:
+  top_k: 5
+
+# ── Preference-pair generation (run once before DPO training) ─────────────────
+preference_pairs:
+  output_path: data/rl/phase4_preference_pairs.jsonl
+  exam_dir: data/exams/raw
+  n_rewrites: 4    # samples per (question, persona) pair
+  rewriter_llm:
+    # Point this at the local server running Gemma-4-E4B (LMStudio / llama.cpp).
+    # The base_url and api_key fall back to OPENAI_BASE_URL / OPENAI_API_KEY from .env.
+    model: gemma-4-e4b    # exact model name as served by your local inference server
+    temperature: 0.8      # high temperature for diverse rewrites
+    max_tokens: 200
+  judge_llm:
+    # Must differ in family from the eval judge used in benchmarks.
+    model: gpt-4o-mini
+    temperature: 0.0
+    max_tokens: 10
+
+# ── DPO training (run on Kaggle/GPU after pairs are generated) ────────────────
+dpo:
+  checkpoint_dir: data/rl/dpo_rewriter_checkpoints    # gitignored
+  model: google/gemma-4-e4b                            # HuggingFace model ID
+  device: cuda
+  epochs: 2
+  batch_size: 2
+  gradient_accumulation_steps: 4
+  lr: 5.0e-5
+  beta: 0.1             # DPO temperature; higher = closer to reference
+  val_fraction: 0.1
+  max_length: 512
+  max_prompt_length: 400
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  lora_target_modules: ["q_proj", "v_proj"]
+
+llm:
+  model: gpt-4o-mini
+  temperature: 0.2
+  max_tokens: 800
+  prompt_variant: en
+
+rewriter:
+  enabled: true
+  llm:
+    model: gpt-4o-mini    # replaced by DPO model at inference after training
+    temperature: 0.3
+    max_tokens: 200

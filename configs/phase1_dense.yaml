@@ -1,0 +1,24 @@
+# Phase 1 — dense retrieval baseline (BGE-M3 + FAISS, no persona).
+seed: 42
+
+knowledge_base:
+  index_path: data/index/phase1.faiss    # FAISS index file; gitignored
+  meta_path: data/index/phase1_meta.json # parallel metadata; gitignored
+
+embedder:
+  model: Qwen/Qwen3-Embedding-0.6B
+  device: cpu     # change to "cuda" on GPU hosts
+  batch_size: 32
+
+chunking:
+  chunk_size: 800
+  chunk_overlap: 150
+
+retrieval:
+  top_k: 5
+
+llm:
+  model: gpt-4o-mini
+  temperature: 0.2
+  max_tokens: 800
+  prompt_variant: en

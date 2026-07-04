@@ -22,6 +22,21 @@ dev = [
     "ruff>=0.11",
     "ipykernel>=6.0",
 ]
+# Dense retrieval (BGE-M3 + FAISS). Not installed by default because sentence-transformers
+# pulls torch (~2GB with CUDA on Linux). On Kaggle torch is pre-installed; install this
+# extra there with: uv sync --extra embedding
+# Local smoke-tests that need embeddings: uv sync --extra embedding (CPU torch only).
+embedding = [
+    "faiss-cpu>=1.8.0.post1",
+    "sentence-transformers>=5.6.0",
+]
+# LoRA adapter training (ROPG-KD retriever + DPO rewriter). Runs on Kaggle/GPU.
+# Install with: uv sync --extra training  (combine with --extra embedding for full setup)
+training = [
+    "peft>=0.15.0",
+    "tqdm>=4.67.0",
+    "trl>=0.12.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -82,3 +97,14 @@ line-ending = "auto"
 [[tool.uv.index]]
 url = "https://pypi.org/simple/"
 default = true
+
+# PyTorch CPU-only wheels (local dev has no GPU; Kaggle provides its own torch).
+# sentence-transformers depends on torch; this pins it to the CPU variant so uv
+# does not pull down 2GB+ of CUDA packages on a CPU-only machine.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }

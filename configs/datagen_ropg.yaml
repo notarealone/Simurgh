@@ -1,0 +1,19 @@
+embedder:
+  model: Qwen/Qwen3-Embedding-0.6B
+  device: cpu
+
+retriever:
+  top_k: 20
+
+judge:
+  model: gpt-4o-mini
+  temperature: 0.0
+  max_tokens: 16
+
+data:
+  chunks: data/chunks/corpus.jsonl
+  questions_dir: data/questions
+  splits_dir: data/splits
+  output_dir: data/ropg_kd
+
+seed: 42

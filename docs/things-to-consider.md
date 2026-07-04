@@ -16,13 +16,13 @@
 
 ## Personalization Mechanism
 
-- [x] **Decided — profile-conditioned query rewriting.** The rewriter is the single trained policy; persona conditions the rewrite (and, on one experimental arm, the generator prompt).
+- [x] **Decided — profile-conditioned query rewriting + ROPG-KD retrieval.** Two trained components: the retriever (ROPG-KD) and the rewriter (DPO); persona conditions both. On one experimental arm, the generator prompt also receives the profile.
   - Caveat to test: on a 3-book corpus the rewriter's *marginal* uplift may be small, and a persona-aware generator may make it redundant above some capability threshold — framed as the persona-aware-vs-blind comparison in [experiment-design](experiment-design.md). A null/modest result here is still reportable.
 - [x] Profile schema → [personas](personas.md): 4 axes (comprehension, prior knowledge, learning goal, explanation style), 4-level ordinal, 4 personas with `newcomer` as a recombination test-holdout. Big Five excluded (single-turn QA). Remaining: freeze exact prose wording + Persian rendering.
 
 ## Evaluation Plan
 
-- [x] Baseline ladder (see [experiment-design](experiment-design.md)): naive RAG → persona-prompted + untrained rewriter → persona-prompted + DPO rewriter
+- [x] Baseline ladder (see [experiment-design](experiment-design.md)): 5 rungs — BM25 no-persona → BGE-M3 no-persona → BGE-M3 untrained rewriter → ROPG-KD untrained rewriter → ROPG-KD DPO rewriter
 - [x] Metrics beyond EM/F1: LLM-judge (primary), human sample, Recall@K/MRR per persona (diagnostic)
 - [x] Significance: paired tests + bootstrap CIs over ≥3 seeds
 - [ ] Build and **freeze** the eval set + judge prompt + seeds before any training run
@@ -36,15 +36,17 @@
 
 ## Open Questions
 
-- [ ] Which small (≤7B) model for the **rewriter** policy? (Gemma-class candidate)
+- [x] Which small (≤7B) model for the **rewriter** policy? → **Gemma-4-E4B + LoRA** (Qwen2.5-3B fallback)
 - [ ] Generator model (light-but-big API) and the two judge models (disjoint families)
 - [ ] Retriever final pick (BM25 vs BGE-M3), pending Recall@K
 - [ ] English vs Persian system prompt — which yields better Persian answers? Both exist as a config-selectable `prompt_variant` (`en` default); compare once the eval harness lands. Expectation: a wash on large API models, a model-specific tradeoff on small/local ones (English aids instruction-following; Persian reduces English leakage).
 
 **Decided**
 
-- *Trained component.* The **query rewriter** (persona-conditioned, small ≤7B + LoRA, DPO) is the only trained policy; the generator is frozen (a light-but-big API model). Rationale: DPO needs a generative policy, and concentrating training on one component keeps gains attributable.
-- *Retriever.* Not trained in the core — a frozen backdrop (BM25 now, BGE-M3 candidate), selected once via Recall@K and held constant. Optional stretch: REINFORCE/ROPG adaptation (online RL, off the DPO-only constraint).
+- *Trained components.* Two components are trained, in order: (1) the **retriever** (BGE-M3 + LoRA, ROPG-KD) and (2) the **query rewriter** (Gemma-4-E4B + LoRA, DPO). The generator remains frozen (a light-but-big API model). Training the retriever first ensures DPO preference pairs are built against a stable retriever.
+- *Retriever.* Trained with **ROPG-KD** — now a core component, not a stretch. BGE-M3 fine-tuned offline via knowledge distillation from LLM judge scores (direct document scoring). ROPG-RL (online) remains out of scope. See Stage 1 in [methodology](methodology.md).
 - *Generator personalization.* Persona-blind vs persona-aware is an experimental axis, not a fixed choice (the rewriter-redundancy question).
-- *Retriever starting point.* Phase 0 uses lexical BM25 (SQLite FTS5), a baseline simpler than DPR. BGE-M3 dense retrieval is the candidate for the frozen backdrop; validate it on held-out Persian QA before committing.
+- *Retriever starting point.* Phase 0 uses lexical BM25 (SQLite FTS5). BGE-M3 is validated as the dense base (Rung 1) before ROPG-KD fine-tuning (Rung 3).
+- *Rewriter policy model.* Gemma-4-E4B + LoRA. Qwen2.5-3B is the fallback if Persian output quality is insufficient — validate with a smoke test (5–10 sample rewrites) before committing to full DPO training.
+- *ROPG-KD teacher signal.* Direct document scoring chosen over generation-mediated scoring. Rationale: direct scoring requires one judge call per `(query, persona, document)` triple vs. one generation + one judge call for generation-mediated, and avoids generation noise obscuring the document's intrinsic utility. The generation-mediated option is noted in [methodology](methodology.md) for completeness.
 - *Generator access.* One OpenAI-compatible client serves both API models (OpenAI, Google AI Studio) and local servers (LMStudio, llama.cpp); the endpoint and key come from the `OPENAI_BASE_URL` and `OPENAI_API_KEY` environment variables, the model from config.

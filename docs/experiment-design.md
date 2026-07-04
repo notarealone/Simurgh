@@ -22,14 +22,19 @@ pursue as needed (not core scope yet):
 
 The core ladder — each rung is a config over shared `src/` modules:
 
-- [x] Rung 0 — naive RAG: lexical BM25, no persona (`configs/phase0_naive.yaml`, see [methodology](methodology.md))
-- [ ] Rung 1 — persona-prompted generator + **untrained** rewriter (the baseline to beat)
-- [ ] Rung 2 — persona-prompted generator + **persona-DPO** rewriter (the contribution)
+- [x] Rung 0 — naive RAG: BM25, no persona (`configs/phase0_naive.yaml`)
+- [ ] Rung 1 — BGE-M3 frozen, no persona (`configs/phase1_dense.yaml`) — retriever swap baseline
+- [ ] Rung 2 — BGE-M3 frozen, persona-prompted **untrained** rewriter (`configs/phase2_prompted_rewriter.yaml`) — baseline to beat
+- [ ] Rung 3 — BGE-M3 + **ROPG-KD**, untrained rewriter (`configs/phase3_ropg_kd.yaml`) — retriever contribution
+- [ ] Rung 4 — BGE-M3 + ROPG-KD, **DPO rewriter** (`configs/phase4_dpo_rewriter.yaml`) — full system
 
-Stretch / future (explicitly outside the RL-DPO core):
+Rungs 3 vs 4 isolate the rewriter's marginal contribution on top of a trained retriever.
+Rungs 1 vs 3 isolate the ROPG-KD retriever's contribution with a fixed (untrained) rewriter.
 
-- [ ] Retriever adaptation via **REINFORCE/ROPG** (online RL, off the DPO-only constraint)
+Future / out of scope:
+
 - [ ] Generator-DPO on a small model
+- [ ] Online ROPG-RL (online reward loop, higher compute)
 
 ## Metrics
 
@@ -64,9 +69,10 @@ essential given the data scarcity above. (Both methods explained where results a
 
 ## Ablation Studies
 
-- [ ] Persona removed (no profile anywhere)
-- [ ] Generator persona-**blind** vs persona-**aware** — does a capable-enough generator make the rewriter redundant? (relate to generator size / the capability threshold)
-- [ ] Rewriter **untrained** vs **DPO** (the rewriter's marginal contribution)
+- [ ] Persona removed (no profile anywhere) — drop profile from rewriter and retriever KD signal
+- [ ] Generator persona-**blind** vs persona-**aware** — does a capable-enough generator make the rewriter redundant?
+- [ ] Rewriter **untrained** vs **DPO** (Rung 3 vs 4 — the rewriter's marginal contribution)
+- [ ] Retriever **frozen BGE-M3** vs **ROPG-KD** (Rung 2 vs 3 — the retriever's marginal contribution)
+- [ ] Retriever: BM25 vs frozen BGE-M3 vs ROPG-KD (full retriever ladder)
 - [ ] On-policy vs off-policy DPO pairs (iterative-DPO study) — optional
-- [ ] Retriever: no-retrieval floor / BM25 / BGE-M3
 - [ ] Document findings in [results](results/)

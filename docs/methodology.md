@@ -6,30 +6,33 @@
 
 ## System Architecture
 
-Simurgh personalizes a RAG pipeline for Persian educational text by training **one**
-component with RL: a persona-conditioned **query rewriter**. Every other component is
-frozen, so any measured gain traces to the rewriter rather than to the system at large.
+Simurgh personalizes a RAG pipeline for Persian educational text by training **two**
+components: a persona-conditioned **query rewriter** (DPO) and a personalized **retriever**
+(ROPG-KD). The generator is frozen; every measured gain traces to a specific trained
+component.
 
 Data flow for a single turn:
 
 ```
 learner profile ─┐
-                 ▼
+                 ├──────────────────────────────────────────────────────┐
+                 ▼                                                      ▼
    user query ─► [ query rewriter ] ─► persona-shaped query ─► [ retriever ] ─► context ─┐
-                  (TRAINED, LoRA)                                (frozen)                 ▼
-                                                                              [ generator ] ─► answer
-                                                                               (frozen)
+                  (TRAINED, DPO)                                (TRAINED, KD)             ▼
+                                                                             [ generator ] ─► answer
+                                                                              (frozen)
 ```
 
-- **Query rewriter** — the only trained policy (small ≤7B model, LoRA, DPO). It reads the
-  learner profile and the raw query and emits a reformulated, persona-conditioned query.
-- **Retriever** — frozen (Phase 0: BM25; candidate: BGE-M3 dense). Because the rewriter
-  shapes the query by persona, the retriever now sees a *persona-dependent* query, so
-  retrieval quality is reported **per persona** as a diagnostic (see [experiment-design](experiment-design.md)).
+- **Query rewriter** — trained with DPO (Gemma-4-E4B + LoRA). Reads the learner profile
+  and the raw query and emits a reformulated, persona-conditioned query.
+- **Retriever** — trained with ROPG-KD (BGE-M3 dense encoder, fine-tuned). An LLM judge
+  scores each `(query, persona, document)` triple offline; those scores are distilled into
+  the encoder so it ranks documents by persona-utility, not generic relevance. Trained
+  before the rewriter (retriever is fixed when DPO pairs are built). Retrieval quality
+  is reported **per persona** (Recall@K, MRR) as a diagnostic (see [experiment-design](experiment-design.md)).
 - **Generator** — frozen, a light-but-big API model. Whether it *also* receives the profile
   is an **experimental axis**: a persona-*aware* generator personalizes the explanation
-  directly, which may make the rewriter redundant above some generator-capability threshold;
-  a persona-*blind* generator isolates the rewriter as the sole personalizer.
+  directly; a persona-*blind* generator isolates the rewriter as the sole personalizer.
 
 Every personalized path can switch back to a "no profile" path (the "profile is the
 contract" rule).
@@ -49,28 +52,69 @@ Lexical retrieval, no personalization. Config: `configs/phase0_naive.yaml`. Demo
 - **Chunking** — fixed character windows with overlap (`src/data/chunking.py`); window size and overlap are config, not constants.
 - **Generator** — one client for any OpenAI-compatible endpoint (`src/rag/llm.py`): OpenAI, Google AI Studio, LMStudio, or llama.cpp. The endpoint and key come from the `OPENAI_BASE_URL` and `OPENAI_API_KEY` environment variables (`.env`); the `model` stays in the config. The prompt tells the model to answer only from the retrieved context and to say when the answer is missing (`src/rag/prompts.py`). The prompt language is a config-selectable variant (`prompt_variant: en|fa`, both instruct a Persian answer) so the two can be compared — see [things-to-consider](things-to-consider.md).
 
-### Retriever — frozen backdrop (planned)
+### Retriever — trained with ROPG-KD (planned)
 
-The retriever is shared infrastructure, not a trained component in the core. It is selected
-once and held constant so the rewriter stays the only moving part.
+The retriever is a trained component (Stage 1, before the rewriter). BGE-M3 is validated
+on Persian first, then fine-tuned with ROPG-KD.
 
-- [ ] Measure retrieval quality (Recall@K, MRR) for the no-retrieval floor / BM25 / BGE-M3 dense, then fix one
-- [ ] If BGE-M3: index with FAISS; rebuild and version the index whenever embeddings or chunking change
-- [ ] Validate dense retrieval on held-out Persian QA before committing
+- [ ] Measure retrieval quality (Recall@K, MRR) for BM25 vs BGE-M3 frozen — this is Rung 1 vs Rung 0
+- [ ] Index BGE-M3 with FAISS; rebuild and version the index whenever embeddings or chunking change
+- [ ] Validate frozen BGE-M3 on held-out Persian QA before committing to ROPG-KD fine-tuning
+- [ ] Run ROPG-KD offline scoring pipeline (judge scores per triple), then KD training
+- [ ] Report Recall@K/MRR per persona on val set after ROPG-KD to confirm retriever gains
 
 ## RL Formulation
 
-The trained policy is the query rewriter; the learning signal is **offline preference
-optimization (DPO)**, not online RL (PPO), per the compute constraints.
+Two components are trained, in order: the retriever (ROPG-KD) and then the query
+rewriter (DPO). Fixing the retriever before building DPO pairs ensures preference
+labels do not shift under the rewriter during training.
 
-- **Policy** — the rewriter `π(rewrite | profile, query)`, a small ≤7B model with a LoRA adapter. A frozen copy is the DPO reference.
+### Stage 1 — Retriever: ROPG-KD
+
+ROPG-KD is the offline, knowledge-distillation variant of the ROPG-RL method (Salemi
+et al., 2024). It trains the retriever without an online reward loop, fitting the
+DPO-only compute constraint.
+
+- **Encoder** — BGE-M3, fine-tuned with a LoRA adapter.
+- **Teacher signal (direct document scoring):** for each `(query, persona)` pair in the
+  train set, retrieve top-K candidate documents and call the LLM judge once per
+  `(query, persona, document)` triple. The judge scores how useful this document is for
+  answering the question for a student with this profile, on a 1–10 rubric (persona fit +
+  pedagogical value + relevance). Scores are stored offline.
+
+  *Alternative considered:* generation-mediated scoring — generate a full answer using
+  only this document as context, then score the answer. Rejected because it doubles API
+  calls per triple (one generation + one judge call vs. one judge call) and adds
+  generation noise that obscures the document's intrinsic utility. Direct scoring is
+  simpler to implement, cheaper, and the rubric can directly target document-level
+  pedagogical value.
+
+- **KD loss:** the judge scores are softmaxed over the top-K documents per
+  `(query, persona)` to form a soft target distribution; the encoder is trained to
+  minimize KL divergence between its similarity distribution and the teacher's utility
+  distribution. This steers the encoder toward ranking pedagogically useful documents
+  first for each persona.
+- **Guard:** report Recall@K/MRR per persona on the val set throughout training to
+  catch reward hacking (an encoder that scores well on the judge rubric but retrieves
+  nothing useful).
+
+### Stage 2 — Rewriter: DPO
+
+The trained rewriter policy is built on top of the **fixed** ROPG-KD retriever.
+
+- **Policy** — Gemma-4-E4B with a LoRA adapter. A frozen copy is the DPO reference.
+  Qwen2.5-3B is the fallback if Persian output quality is insufficient (validated by
+  smoke-testing rewrites before training).
 - **Action** — emit a reformulated, persona-conditioned query.
-- **Reward (for building preferences)** — `retrieval_quality + λ · persona_fit`:
-  - `persona_fit` — an LLM-judge score on the *final* answer (persona fit + pedagogical quality + faithfulness), credit-assigned end-to-end through the frozen retriever and generator.
-  - `retrieval_quality` — an objective anchor (e.g. Recall@K vs. gold passages) that guards against reward hacking — a rewrite that games the judge but retrieves nothing useful.
-  - The labeling judge that builds pairs must differ in family from the eval judge that scores results (judge independence — [experiment-design](experiment-design.md), [things-to-consider](things-to-consider.md)).
-- **Preference-pair construction** — on-policy preferred: sample several rewrites from the current policy → each is retrieved + generated (frozen) → the labeling judge scores each final answer → chosen = highest, rejected = lowest. Iterating this (resample from the *updated* policy) is **iterative DPO**, the closest offline analogue to online RL. A cheaper off-policy start (pairs from a big model) is the fallback; on-policy vs off-policy is itself a reportable comparison.
-- **Algorithm** — DPO over the LoRA adapter. Optional SFT warmup on the "chosen" rewrites only if DPO from the base policy proves unstable.
+- **Preference-pair construction** — for each `(query, persona)` in the train split:
+  sample several rewrites from the current policy → retrieve + generate through the
+  fixed ROPG-KD retriever and frozen generator → the labeling judge scores each final
+  answer (persona fit + pedagogical quality + faithfulness) → chosen = highest score,
+  rejected = lowest. Iterating this on the updated policy is **iterative DPO**.
+- **Algorithm** — DPO over the LoRA adapter. Optional SFT warmup if DPO from the base
+  policy proves unstable.
+- **Judge independence:** the judge that labels DPO pairs must differ in family from the
+  judge that scores evaluation results.
 
 ## Personalization Module
 
@@ -83,7 +127,17 @@ options in [things-to-consider](things-to-consider.md)).
 
 ## Training Procedure
 
-- [ ] Build the persona-conditioned preference dataset from the **train split only** ([question-extraction](question-extraction.md) questions × personas; pairs labeled as above)
+**Stage 1 — ROPG-KD retriever**
+
+- [ ] Validate frozen BGE-M3 on Persian (Recall@K/MRR vs BM25); commit to BGE-M3 if it matches or beats BM25
+- [ ] Run the offline scoring pipeline: for each `(query, persona, document)` triple in the train set, call the judge and store a utility score (`src/rl/scorer.py`)
+- [ ] KD-train the BGE-M3 LoRA adapter; select checkpoint on val Recall@K per persona
+- [ ] Freeze the ROPG-KD retriever checkpoint before Stage 2
+
+**Stage 2 — DPO rewriter**
+
+- [ ] Smoke-test Gemma-4-E4B Persian output (5–10 sample rewrites); fall back to Qwen2.5-3B if quality is poor
+- [ ] Build the persona-conditioned preference dataset from the **train split only** ([question-extraction](question-extraction.md) questions × personas; pairs labeled by the Stage 2 judge)
 - [ ] DPO-train the rewriter LoRA against a frozen reference; low LR, 1–3 epochs
 - [ ] Select checkpoints on **validation** persona-fit (not train loss); watch for length/repetition hacking and policy degeneration
 - [ ] Log seed, config, and model + index versions per run (reproducible by construction)
@@ -93,7 +147,8 @@ judges are API calls.
 
 ## Inference
 
-User query + learner profile → the rewriter emits a persona-shaped query → the frozen
+User query + learner profile → the rewriter emits a persona-shaped query → the ROPG-KD
 retriever returns context → the frozen generator produces the answer (profile in its prompt
 on the persona-aware configuration). The same path serves every rung; rungs differ only by
-config — untrained vs DPO rewriter, persona on/off, generator persona-aware vs persona-blind.
+config — untrained vs DPO rewriter, frozen vs ROPG-KD retriever, persona on/off, generator
+persona-aware vs persona-blind.

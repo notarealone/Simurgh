@@ -1,0 +1,35 @@
+# Phase 2 — BGE-M3 frozen + persona-prompted untrained rewriter.
+seed: 42
+
+knowledge_base:
+  index_path: data/index/phase1.faiss     # reuse the Phase 1 index (same corpus, same embedder)
+  meta_path: data/index/phase1_meta.json
+
+embedder:
+  model: Qwen/Qwen3-Embedding-0.6B
+  device: cpu
+  batch_size: 32
+
+chunking:
+  chunk_size: 800
+  chunk_overlap: 150
+
+retrieval:
+  top_k: 5
+
+rewriter:
+  enabled: true
+  llm:
+    model: gpt-4o-mini
+    temperature: 0.3    # slightly higher than generator; creative reformulation
+    max_tokens: 200     # rewrites are short
+
+llm:
+  model: gpt-4o-mini
+  temperature: 0.2
+  max_tokens: 800
+  prompt_variant: en
+
+# Default persona for single-run demos. Evaluation scripts iterate over all personas.
+persona:
+  id: crammer
