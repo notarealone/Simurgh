@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 class DenseStore:
-    """Persistent dense retrieval store: BGE-M3 encoder + FAISS IndexFlatIP."""
+    """Persistent dense retrieval store: Qwen3-Embedding-0.6B encoder + FAISS IndexFlatIP."""
 
     def __init__(
         self,

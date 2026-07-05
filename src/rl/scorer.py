@@ -111,7 +111,7 @@ def _load_scored(output_path: Path) -> set[tuple[str, str, str, int]]:
 
 def run_scorer(config: dict) -> None:
     from rag.dense_store import DenseStore
-    from rag.embedder import BGE_M3Embedder
+    from rag.embedder import Qwen3Embedder
 
     scorer_cfg = config["scorer"]
     output_path = Path(scorer_cfg["output_path"])
@@ -122,8 +122,8 @@ def run_scorer(config: dict) -> None:
 
     # Build / open the dense index (read-only; we never add chunks here).
     emb_cfg = config.get("embedder", {})
-    embedder = BGE_M3Embedder(
-        model_name=emb_cfg.get("model", "BAAI/bge-m3"),
+    embedder = Qwen3Embedder(
+        model_name=emb_cfg.get("model", "Qwen/Qwen3-Embedding-0.6B"),
         device=emb_cfg.get("device", "cpu"),
     )
     store = DenseStore(

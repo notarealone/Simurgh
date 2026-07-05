@@ -220,6 +220,12 @@ For each `(question_stem, persona_id)` in the split:
 
 Config keys: `rewriter.n_candidates` (default 6), `rewriter.temperatures`.
 
+*Approach choice:* Direct rewrite scoring was chosen over end-to-end scoring
+(retrieve → generate → judge the final answer) on cost grounds — end-to-end would
+require N generation calls (800 tokens each) per (question, persona), which is
+prohibitive on a 4-week thesis budget. See [methodology](methodology.md) for the
+full trade-off analysis.
+
 ### DPO judge prompt
 
 ```

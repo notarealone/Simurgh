@@ -1,4 +1,4 @@
-# Phase 1 — dense retrieval baseline (BGE-M3 + FAISS, no persona).
+# Phase 1 — dense retrieval baseline (Qwen3-Embedding-0.6B + FAISS, no persona).
 seed: 42
 
 knowledge_base:

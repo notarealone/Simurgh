@@ -1,4 +1,4 @@
-# Phase 2 — BGE-M3 frozen + persona-prompted untrained rewriter.
+# Phase 2 — Qwen3-Embedding-0.6B frozen + persona-prompted untrained rewriter.
 seed: 42
 
 knowledge_base:

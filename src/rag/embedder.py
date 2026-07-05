@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import torch
 from sentence_transformers import SentenceTransformer
 
 
@@ -15,23 +16,31 @@ class Qwen3Embedder:
     config when trust_remote_code=True.
     """
 
-    def __init__(self, model_name: str = "Qwen/Qwen3-Embedding-0.6B", device: str = "cpu") -> None:
-        self.model = SentenceTransformer(model_name, device=device, trust_remote_code=True)
-        self.dim: int = self.model.get_sentence_embedding_dimension()
+    def __init__(
+        self,
+        model_name: str = "Qwen/Qwen3-Embedding-0.6B",
+        device: str = "cpu",
+        batch_size: int = 32,
+        fp16: bool = False,
+    ) -> None:
+        model_kwargs = {"torch_dtype": torch.float16} if fp16 else {}
+        self.model = SentenceTransformer(
+            model_name, device=device, trust_remote_code=True, model_kwargs=model_kwargs
+        )
+        self.batch_size = batch_size
+        self.dim: int = self.model.get_embedding_dimension()
 
-    def encode(self, texts: list[str], batch_size: int = 32) -> np.ndarray:
+    def encode(self, texts: list[str]) -> np.ndarray:
         """Encode documents (no instruction prefix). Returns float32 (N, dim), L2-normalised."""
         vecs = self.model.encode(
             texts,
-            batch_size=batch_size,
+            batch_size=self.batch_size,
             normalize_embeddings=True,
             show_progress_bar=False,
         )
         return np.array(vecs, dtype=np.float32)
 
-    def encode_query(
-        self, texts: list[str], instruction: str = "", batch_size: int = 32
-    ) -> np.ndarray:
+    def encode_query(self, texts: list[str], instruction: str = "") -> np.ndarray:
         """Encode queries with an optional persona instruction prefix.
 
         When *instruction* is provided the model sees:
@@ -43,14 +52,14 @@ class Qwen3Embedder:
             vecs = self.model.encode(
                 texts,
                 prompt=prompt,
-                batch_size=batch_size,
+                batch_size=self.batch_size,
                 normalize_embeddings=True,
                 show_progress_bar=False,
             )
         else:
             vecs = self.model.encode(
                 texts,
-                batch_size=batch_size,
+                batch_size=self.batch_size,
                 normalize_embeddings=True,
                 show_progress_bar=False,
             )

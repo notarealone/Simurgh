@@ -1,9 +1,9 @@
-"""ROPG-KD: fine-tune the BGE-M3 encoder via knowledge distillation from LLM judge scores.
+"""ROPG-KD: fine-tune the Qwen3-Embedding-0.6B encoder via knowledge distillation from LLM judge scores.
 
 Stage 1 of Simurgh's two-stage training:
   1. Load scored (query, persona, document) triples from the scorer output.
   2. Group by (query, persona_id) to form soft target distributions over top-K docs.
-  3. Fine-tune the BGE-M3 encoder with a LoRA adapter to minimise KL divergence
+  3. Fine-tune the Qwen3-Embedding-0.6B encoder with a LoRA adapter to minimise KL divergence
      between its similarity distribution and the teacher's utility distribution.
   4. Checkpoint on validation Recall@K per persona.
 
@@ -89,7 +89,7 @@ def train(config: dict) -> None:
 
     # Load the encoder and wrap with a LoRA adapter.
     emb_cfg = config.get("embedder", {})
-    model_name = emb_cfg.get("model", "BAAI/bge-m3")
+    model_name = emb_cfg.get("model", "Qwen/Qwen3-Embedding-0.6B")
     st_model = SentenceTransformer(model_name, device=device)
 
     # Access the underlying transformer for LoRA.

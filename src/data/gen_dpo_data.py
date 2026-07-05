@@ -18,6 +18,45 @@ from rag.rewriter import PromptedRewriter
 
 logger = logging.getLogger(__name__)
 
+
+class _LocalUnslothClient:
+    """Thin wrapper around a loaded Unsloth model with the same .chat() interface as OpenAICompatClient."""
+
+    def __init__(self, model, tokenizer, temperature: float = 0.7, max_completion_tokens: int = 300) -> None:
+        self.model = model
+        self.tokenizer = tokenizer
+        self.temperature = temperature
+        self.max_completion_tokens = max_completion_tokens
+
+    def chat(self, messages: list[dict[str, str]]) -> str:
+        # Gemma-4 requires content as a list of typed parts, not a plain string
+        gemma_messages = [
+            {"role": m["role"], "content": [{"type": "text", "text": m["content"]}]}
+            for m in messages
+        ]
+
+        inputs = self.tokenizer.apply_chat_template(
+            gemma_messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+        ).to("cuda")
+
+        input_len = inputs["input_ids"].shape[1]
+        outputs = self.model.generate(
+            **inputs,
+            max_new_tokens=self.max_completion_tokens,
+            temperature=self.temperature if self.temperature > 0 else 1.0,
+            top_p=0.95,
+            top_k=64,
+            do_sample=self.temperature > 0,
+            use_cache=True,
+        )
+
+        new_tokens = outputs[0][input_len:]
+        return self.tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+
 JUDGE_SYSTEM = "You are an expert Persian language tutor evaluating query rewrites for a RAG retrieval system."
 
 
@@ -119,12 +158,35 @@ def main() -> None:
 
     persona_ids = [p.id for p in train_personas()]
 
+    from unsloth import FastModel
+
+    logger.info("Loading rewriter model %s via Unsloth...", rewriter_cfg["model"])
+    rw_model, rw_tokenizer = FastModel.from_pretrained(
+        model_name=rewriter_cfg["model"],
+        dtype=None,
+        max_seq_length=512,
+        load_in_4bit=True,
+        full_finetuning=False,
+        device_map="balanced",
+    )
+    logger.info("Rewriter model loaded.")
+
+    rewriter_clients = {
+        temp: _LocalUnslothClient(
+            model=rw_model,
+            tokenizer=rw_tokenizer,
+            temperature=temp,
+            max_completion_tokens=rewriter_cfg["max_completion_tokens"],
+        )
+        for temp in temperatures
+    }
+
     judge_client = OpenAICompatClient(
         base_url=OPENAI_BASE_URL,
         api_key=OPENAI_API_KEY,
         model=judge_cfg["model"],
         temperature=judge_cfg["temperature"],
-        max_tokens=judge_cfg["max_tokens"],
+        max_tokens=judge_cfg["max_completion_tokens"],
     )
 
     for split_name in ("train", "val"):
@@ -170,14 +232,7 @@ def main() -> None:
                     candidates: list[tuple[str, float]] = []
 
                     for temp in temperatures:
-                        rewriter_client = OpenAICompatClient(
-                            base_url=OPENAI_BASE_URL,
-                            api_key=OPENAI_API_KEY,
-                            model=rewriter_cfg["model"],
-                            temperature=temp,
-                            max_tokens=rewriter_cfg["max_tokens"],
-                        )
-                        rewriter = PromptedRewriter(rewriter_client)
+                        rewriter = PromptedRewriter(rewriter_clients[temp])
 
                         try:
                             rewrite = rewriter.rewrite(persona_rendered, query)

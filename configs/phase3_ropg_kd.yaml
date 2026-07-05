@@ -1,8 +1,8 @@
-# Phase 3 — BGE-M3 + ROPG-KD trained retriever, untrained rewriter.
+# Phase 3 — Qwen3-Embedding-0.6B + ROPG-KD trained retriever, untrained rewriter.
 seed: 42
 
 knowledge_base:
-  index_path: data/index/phase1.faiss     # frozen BGE-M3 index used for candidate retrieval
+  index_path: data/index/phase1.faiss     # frozen Qwen3-Embedding-0.6B index used for candidate retrieval
   meta_path: data/index/phase1_meta.json
 
 embedder:
@@ -39,7 +39,7 @@ ropg_kd:
   lora_r: 8
   lora_alpha: 16
   lora_dropout: 0.1
-  lora_target_modules: ["query", "value"]
+  lora_target_modules: ["q_proj", "v_proj"]
 
 llm:
   model: gpt-4o-mini

@@ -8,7 +8,7 @@
 ## Reward Signal
 
 - [x] What the judge evaluates — persona fit + pedagogical quality + faithfulness (decomposed rubric)
-- [x] How it is used — end-to-end **preference pairs** for DPO on the rewriter; reward `retrieval_quality + λ·persona_fit` (the retrieval term guards against judge-hacking)
+- [x] How it is used — **proxy-judge preference pairs** for DPO on the rewriter; the judge scores each candidate rewrite directly on predicted retrieval fit (0–1 float) — no live retrieval or generation in the datagen loop
 - [x] Judge independence — the pair-labeling judge family ≠ the eval-scoring judge family
 - [ ] Write the concrete scoring rubric (text, scale, decomposition)
 - [ ] Human-validation sample (30–50) confirming judge scores track pedagogical quality
@@ -37,7 +37,7 @@
 ## Open Questions
 
 - [x] Which small (≤7B) model for the **rewriter** policy? → **Gemma-4-E4B + LoRA** (Qwen2.5-3B fallback)
-- [ ] Generator model (light-but-big API) and the two judge models (disjoint families)
+- [ ] Generator model (light-but-big API) and the **evaluation** judge model — the eval judge must come from a family disjoint from the data-generation judges below
 - [ ] Retriever final pick (BM25 vs BGE-M3), pending Recall@K
 - [ ] English vs Persian system prompt — which yields better Persian answers? Both exist as a config-selectable `prompt_variant` (`en` default); compare once the eval harness lands. Expectation: a wash on large API models, a model-specific tradeoff on small/local ones (English aids instruction-following; Persian reduces English leakage).
 
@@ -49,4 +49,5 @@
 - *Retriever starting point.* Phase 0 uses lexical BM25 (SQLite FTS5). BGE-M3 is validated as the dense base (Rung 1) before ROPG-KD fine-tuning (Rung 3).
 - *Rewriter policy model.* Gemma-4-E4B + LoRA. Qwen2.5-3B is the fallback if Persian output quality is insufficient — validate with a smoke test (5–10 sample rewrites) before committing to full DPO training.
 - *ROPG-KD teacher signal.* Direct document scoring chosen over generation-mediated scoring. Rationale: direct scoring requires one judge call per `(query, persona, document)` triple vs. one generation + one judge call for generation-mediated, and avoids generation noise obscuring the document's intrinsic utility. The generation-mediated option is noted in [methodology](methodology.md) for completeness.
+- *Data-generation judges.* **gpt-5.4-mini** for ROPG-KD teacher scoring, **gpt-5.4-nano** for DPO rewrite scoring; rewrite candidates are sampled from the local Gemma-4-E4B policy itself. Rationale: price and generation time — the ROPG teacher scores 20 chunks per `(query, persona)` and warrants the stronger mini, while the DPO judge rates short rewrites where nano suffices. Per the guard-the-judge rule, the *evaluation* judge (still open above) must not reuse these models/prompts.
 - *Generator access.* One OpenAI-compatible client serves both API models (OpenAI, Google AI Studio) and local servers (LMStudio, llama.cpp); the endpoint and key come from the `OPENAI_BASE_URL` and `OPENAI_API_KEY` environment variables, the model from config.

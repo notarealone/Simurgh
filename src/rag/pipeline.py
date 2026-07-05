@@ -114,6 +114,8 @@ class DenseRAG(NaiveRAG):
         embedder = Qwen3Embedder(
             model_name=emb_cfg.get("model", "Qwen/Qwen3-Embedding-0.6B"),
             device=emb_cfg.get("device", "cpu"),
+            batch_size=emb_cfg.get("batch_size", 32),
+            fp16=emb_cfg.get("fp16", False),
         )
         store = DenseStore(
             index_path=config["knowledge_base"]["index_path"],
@@ -153,6 +155,8 @@ class PersonaRAG(DenseRAG):
         embedder = Qwen3Embedder(
             model_name=emb_cfg.get("model", "Qwen/Qwen3-Embedding-0.6B"),
             device=emb_cfg.get("device", "cpu"),
+            batch_size=emb_cfg.get("batch_size", 32),
+            fp16=emb_cfg.get("fp16", False),
         )
         store = DenseStore(
             index_path=config["knowledge_base"]["index_path"],

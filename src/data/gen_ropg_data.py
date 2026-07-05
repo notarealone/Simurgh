@@ -124,7 +124,7 @@ def _retrieve_top_k(
     chunk_ids: list[str],
     chunk_texts: list[str],
 ) -> tuple[list[str], list[str]]:
-    sims = query_vec @ chunk_matrix.T
+    sims = query_vec.squeeze() @ chunk_matrix.T
     top_idx = np.argsort(sims)[-top_k:][::-1]
     ids = [chunk_ids[i] for i in top_idx]
     texts = [chunk_texts[i] for i in top_idx]
@@ -159,6 +159,8 @@ def run(config_path: str | Path) -> None:
     embedder = Qwen3Embedder(
         model_name=cfg["embedder"]["model"],
         device=cfg["embedder"]["device"],
+        batch_size=cfg["embedder"].get("batch_size", 32),
+        fp16=cfg["embedder"].get("fp16", False),
     )
     chunk_matrix = embedder.encode(chunk_texts)
 
@@ -168,7 +170,7 @@ def run(config_path: str | Path) -> None:
         api_key=OPENAI_API_KEY,
         model=cfg["judge"]["model"],
         temperature=cfg["judge"]["temperature"],
-        max_tokens=cfg["judge"]["max_tokens"],
+        max_completion_tokens=cfg["judge"]["max_completion_tokens"],
     )
 
     train_profiles = train_personas()

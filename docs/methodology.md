@@ -107,10 +107,21 @@ The trained rewriter policy is built on top of the **fixed** ROPG-KD retriever.
   smoke-testing rewrites before training).
 - **Action** — emit a reformulated, persona-conditioned query.
 - **Preference-pair construction** — for each `(query, persona)` in the train split:
-  sample several rewrites from the current policy → retrieve + generate through the
-  fixed ROPG-KD retriever and frozen generator → the labeling judge scores each final
-  answer (persona fit + pedagogical quality + faithfulness) → chosen = highest score,
-  rejected = lowest. Iterating this on the updated policy is **iterative DPO**.
+  sample N=6 rewrites from the current policy at varying temperatures (0.3–1.3) to
+  ensure diversity → the labeling judge scores each rewrite *directly* on how well it
+  would help retrieve the right study material for this learner (0–1 scale) →
+  chosen = highest score, rejected = lowest. Cross-persona negatives are added for
+  free: scholar's best rewrite becomes crammer's rejected (and vice versa), gated by
+  a minimum score gap to keep the signal meaningful.
+
+  *Alternative considered:* end-to-end scoring — retrieve + generate through the
+  fixed ROPG-KD retriever and frozen generator, then judge the final answer for
+  persona fit + pedagogical quality + faithfulness. Rejected because it triples the
+  API cost per (query, persona): N generation calls at 800 tokens each (≈ 1,800 extra
+  calls for ~100 questions × 3 personas × 6 rewrites) on a thesis budget with no
+  batch discount. The proxy judge's predicted retrieval quality is a practical
+  substitute: rewrite framing and vocabulary are the primary lever for which passage
+  depth is retrieved, and the judge can evaluate this without running the full pipeline.
 - **Algorithm** — DPO over the LoRA adapter. Optional SFT warmup if DPO from the base
   policy proves unstable.
 - **Judge independence:** the judge that labels DPO pairs must differ in family from the

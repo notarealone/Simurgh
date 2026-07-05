@@ -1,16 +1,20 @@
-"""Generate DPO preference pairs for the query rewriter.
+"""Generate DPO rewriter preference pairs via the end-to-end approach (retrieve → generate → judge answer).
 
-For each (question, persona) in the train split:
-  1. Sample N rewrites from the current rewriter policy (Gemma-4-E4B via an
-     OpenAI-compatible endpoint — e.g. LMStudio or llama.cpp serving the model).
-  2. For each rewrite: retrieve top-K docs → generate an answer with the frozen generator.
-  3. Score each answer with the labeling judge (must differ in family from the eval judge).
-  4. Write (chosen, rejected) pair — highest and lowest scored rewrites — to a JSONL file.
+.. deprecated::
+    NOT USED in the current pipeline.
 
-The script is resumable: (question, persona) pairs already in the output file are skipped.
+    This module implements the end-to-end DPO pair generation approach:
+    sample rewrites → retrieve + generate through the ROPG-KD retriever and frozen
+    generator → judge the final answer for persona fit + pedagogical quality +
+    faithfulness. It was superseded by the proxy-judge approach on cost grounds:
+    end-to-end requires N generation calls (800 tokens each) per (query, persona),
+    which is prohibitive on a thesis budget.
 
-Typical usage:
-    uv run python -m rl.preference_pairs --config configs/phase4_dpo_rewriter.yaml
+    Active data generation:
+        - Script:   src/data/gen_dpo_data.py
+        - Notebook: notebooks/gen_dpo_data.ipynb
+
+    Kept for reference; do not run against the current pipeline.
 """
 
 from __future__ import annotations
@@ -86,7 +90,7 @@ def _load_done(output_path: Path) -> set[tuple[str, str, str]]:
 
 def run(config: dict) -> None:
     from rag.dense_store import DenseStore
-    from rag.embedder import BGE_M3Embedder
+    from rag.embedder import Qwen3Embedder
 
     pp_cfg = config["preference_pairs"]
     output_path = Path(pp_cfg["output_path"])
@@ -126,8 +130,8 @@ def run(config: dict) -> None:
 
     # Dense retriever (ROPG-KD trained; reads the index from config).
     emb_cfg = config.get("embedder", {})
-    embedder = BGE_M3Embedder(
-        model_name=emb_cfg.get("model", "BAAI/bge-m3"),
+    embedder = Qwen3Embedder(
+        model_name=emb_cfg.get("model", "Qwen/Qwen3-Embedding-0.6B"),
         device=emb_cfg.get("device", "cpu"),
     )
     store = DenseStore(

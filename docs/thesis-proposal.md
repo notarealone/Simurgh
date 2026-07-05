@@ -96,3 +96,24 @@ scope:
   before committing to full DPO training).
 - **Training order:** ROPG-KD retriever first (retriever fixed), then DPO rewriter on
   top — ensures preference pairs for DPO are built against a stable retriever.
+
+### v1.3 — 2026-07-04 — DPO data generation approach: proxy-judge chosen over end-to-end
+
+The DPO preference pair construction described in v1.2 (retrieve + generate through the
+ROPG-KD retriever and frozen generator → judge the final answer) is replaced by a
+**proxy-judge** approach:
+
+- Generate N=6 candidate rewrites per (question, persona) at varying temperatures
+  (0.3–1.3) using the untrained prompted rewriter.
+- Call the LLM judge once per rewrite to rate predicted retrieval fit (0–1 scale):
+  "how well would this rewrite help retrieve the right study material for this learner?"
+- Pair the highest- and lowest-scoring rewrites as (chosen, rejected).
+- Cross-persona negatives added for free: scholar's best rewrite → crammer's rejected.
+
+The end-to-end alternative was rejected: it triples the API cost (N generation calls
+at 800 tokens each, ≈ 1,800 extra calls for the train split) on a thesis budget with
+no batch discount. The proxy judge's predicted retrieval quality is a practical
+substitute within the 4-week, minimal-compute project constraints.
+
+Implementation: `src/data/gen_dpo_data.py` (script) and `notebooks/gen_dpo_data.ipynb`
+(Kaggle notebook).
