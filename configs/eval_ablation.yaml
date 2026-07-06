@@ -1,0 +1,47 @@
+# Ablation evaluation: 3-step comparison of retriever and rewriter contributions.
+seeds: [42, 43, 44]
+test_persona: newcomer
+output_dir: results/ablation/
+questions_dir: data/questions/
+corpus_jsonl: data/chunks/corpus.jsonl
+
+judge:
+  model: gemini/gemini-3.5-flash
+  max_retries: 3
+
+steps:
+  step1:
+    name: frozen_retriever_no_rewriter
+    description: "Frozen Qwen3-Embedding, no rewriter, gpt-5-nano generator"
+    embedder_adapter_path: null
+    rewriter_type: none
+    generator_model: gpt-5-nano
+    index_path: data/index/phase1.faiss
+    meta_path: data/index/phase1_meta.json
+
+  step2:
+    name: ropg_kd_retriever_no_rewriter
+    description: "ROPG-KD Qwen3-Embedding adapter, no rewriter, gpt-5-nano generator"
+    embedder_adapter_path: data/rl/ropg_kd_checkpoints/best
+    rewriter_type: none
+    generator_model: gpt-5-nano
+    index_path: data/index/phase3.faiss
+    meta_path: data/index/phase3_meta.json
+
+  step3:
+    name: ropg_kd_retriever_dpo_rewriter
+    description: "ROPG-KD adapter + DPO Qwen3-4B rewriter, gpt-5-nano generator"
+    embedder_adapter_path: data/rl/ropg_kd_checkpoints/best
+    rewriter_type: dpo
+    dpo_model: Qwen/Qwen3-4B
+    dpo_adapter_path: data/rl/dpo_rewriter_checkpoints/dpo_best
+    generator_model: gpt-5-nano
+    index_path: data/index/phase3.faiss
+    meta_path: data/index/phase3_meta.json
+
+retrieval:
+  top_k: 5
+
+chunking:
+  chunk_size: 800
+  chunk_overlap: 150

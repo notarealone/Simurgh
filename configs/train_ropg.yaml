@@ -1,0 +1,39 @@
+# Stage-1 training: ROPG-KD fine-tunes the Qwen3-Embedding-0.6B retriever via knowledge
+# distillation from LLM-judge teacher scores (see notebooks/gen_ropg_data.ipynb +
+# configs/datagen_ropg.yaml for how data/ropg_kd/{train,val}.jsonl is produced).
+seed: 42
+
+data:
+  train_path: data/ropg_kd/train.jsonl
+  val_path: data/ropg_kd/val.jsonl
+  corpus_path: data/chunks/corpus.jsonl
+
+embedder:
+  model: Qwen/Qwen3-Embedding-0.6B
+  max_seq_length: 512    # most chunks are <260 tokens; 8192 wastes O(n²) attention
+  attn_implementation: sdpa   # fused attention; works on T4 without flash-attn
+
+training:
+  device: cuda        # cpu for local smoke runs
+  precision: fp16      # fp16 | fp32 — Kaggle T4/P100 have no bf16
+  gradient_checkpointing: true  # recompute activations in backward; needed on 16 GB T4
+  epochs: 5
+  batch_size: 8        # groups per optimizer step (gradient accumulation)
+  doc_micro_batch: 8   # docs per forward within a group; caps peak activation memory
+  lr: 2.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  grad_clip: 1.0
+  kd_temperature: 1.0
+
+lora:
+  r: 8
+  alpha: 16
+  dropout: 0.1
+  target_modules: [q_proj, v_proj]
+
+eval:
+  top_k: 5             # matches inference retrieval.top_k
+  relevance_top_m: 3   # relevant = top-m docs by teacher_score per group
+
+checkpoint_dir: data/rl/ropg_kd_checkpoints

@@ -14,6 +14,9 @@ class Qwen3Embedder:
     supports instruction-prefixed queries for task-conditioned retrieval.
     sentence-transformers handles last-token pooling automatically via the model's
     config when trust_remote_code=True.
+
+    If *adapter_path* is set, a LoRA adapter (e.g. the ROPG-KD checkpoint from
+    src/rl/ropg_kd.py) is loaded on top of the base model and merged into its weights.
     """
 
     def __init__(
@@ -22,11 +25,19 @@ class Qwen3Embedder:
         device: str = "cpu",
         batch_size: int = 32,
         fp16: bool = False,
+        adapter_path: str | None = None,
     ) -> None:
         model_kwargs = {"torch_dtype": torch.float16} if fp16 else {}
         self.model = SentenceTransformer(
             model_name, device=device, trust_remote_code=True, model_kwargs=model_kwargs
         )
+        if adapter_path is not None:
+            from peft import PeftModel
+
+            # from_pretrained injects the adapter into the base model in place and
+            # merge_and_unload folds the LoRA weights into it, so no reassignment is
+            # needed (auto_model is a read-only property on the Transformer module).
+            PeftModel.from_pretrained(self.model[0].auto_model, adapter_path).merge_and_unload()
         self.batch_size = batch_size
         self.dim: int = self.model.get_embedding_dimension()
 

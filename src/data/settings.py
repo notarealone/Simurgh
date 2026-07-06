@@ -17,3 +17,7 @@ load_dotenv()
 OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "local")
 # Endpoint; None lets the OpenAI SDK fall back to its default (the official API).
 OPENAI_BASE_URL: str | None = os.environ.get("OPENAI_BASE_URL")
+
+# Gemini judge credentials.
+GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_ENDPOINT: str | None = os.environ.get("GEMINI_ENDPOINT")

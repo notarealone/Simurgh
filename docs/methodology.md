@@ -23,9 +23,9 @@ learner profile ─┐
                                                                               (frozen)
 ```
 
-- **Query rewriter** — trained with DPO (Gemma-4-E4B + LoRA). Reads the learner profile
+- **Query rewriter** — trained with DPO (Qwen3-4B + LoRA). Reads the learner profile
   and the raw query and emits a reformulated, persona-conditioned query.
-- **Retriever** — trained with ROPG-KD (BGE-M3 dense encoder, fine-tuned). An LLM judge
+- **Retriever** — trained with ROPG-KD (Qwen3-Embedding-0.6B dense encoder, fine-tuned). An LLM judge
   scores each `(query, persona, document)` triple offline; those scores are distilled into
   the encoder so it ranks documents by persona-utility, not generic relevance. Trained
   before the rewriter (retriever is fixed when DPO pairs are built). Retrieval quality
@@ -54,12 +54,12 @@ Lexical retrieval, no personalization. Config: `configs/phase0_naive.yaml`. Demo
 
 ### Retriever — trained with ROPG-KD (planned)
 
-The retriever is a trained component (Stage 1, before the rewriter). BGE-M3 is validated
-on Persian first, then fine-tuned with ROPG-KD.
+The retriever is a trained component (Stage 1, before the rewriter). Qwen3-Embedding-0.6B is
+validated on Persian first, then fine-tuned with ROPG-KD.
 
-- [ ] Measure retrieval quality (Recall@K, MRR) for BM25 vs BGE-M3 frozen — this is Rung 1 vs Rung 0
-- [ ] Index BGE-M3 with FAISS; rebuild and version the index whenever embeddings or chunking change
-- [ ] Validate frozen BGE-M3 on held-out Persian QA before committing to ROPG-KD fine-tuning
+- [ ] Measure retrieval quality (Recall@K, MRR) for BM25 vs Qwen3-Embedding-0.6B frozen — this is Rung 1 vs Rung 0
+- [ ] Index Qwen3-Embedding-0.6B with FAISS; rebuild and version the index whenever embeddings or chunking change
+- [ ] Validate frozen Qwen3-Embedding-0.6B on held-out Persian QA before committing to ROPG-KD fine-tuning
 - [ ] Run ROPG-KD offline scoring pipeline (judge scores per triple), then KD training
 - [ ] Report Recall@K/MRR per persona on val set after ROPG-KD to confirm retriever gains
 
@@ -75,12 +75,13 @@ ROPG-KD is the offline, knowledge-distillation variant of the ROPG-RL method (Sa
 et al., 2024). It trains the retriever without an online reward loop, fitting the
 DPO-only compute constraint.
 
-- **Encoder** — BGE-M3, fine-tuned with a LoRA adapter.
+- **Encoder** — Qwen3-Embedding-0.6B, fine-tuned with a LoRA adapter.
 - **Teacher signal (direct document scoring):** for each `(query, persona)` pair in the
   train set, retrieve top-K candidate documents and call the LLM judge once per
   `(query, persona, document)` triple. The judge scores how useful this document is for
-  answering the question for a student with this profile, on a 1–10 rubric (persona fit +
-  pedagogical value + relevance). Scores are stored offline.
+  answering the question for a student with this profile, as a 0–1 utility score
+  (persona fit + pedagogical value + relevance). Scores are stored offline in
+  `data/ropg_kd/{train,val}.jsonl`.
 
   *Alternative considered:* generation-mediated scoring — generate a full answer using
   only this document as context, then score the answer. Rejected because it doubles API
@@ -94,17 +95,43 @@ DPO-only compute constraint.
   minimize KL divergence between its similarity distribution and the teacher's utility
   distribution. This steers the encoder toward ranking pedagogically useful documents
   first for each persona.
+- **Training is fully offline and self-contained.** Once the teacher scores are stored,
+  KD training involves *no other model*: not the rewriter (queries are the raw exam
+  questions, the same ones the scoring pipeline retrieved with — the rewriter only
+  enters in Stage 2, against this then-frozen retriever), not the generator, and not
+  the judge itself — so a training run makes zero API calls and is re-runnable for
+  free across seeds. One step processes one `(query, persona)` group: the query is
+  embedded with the rendered persona profile as the Qwen3-Embedding instruction prefix
+  (`Instruct: <profile>\nQuery: …`), the group's candidate documents are embedded with
+  no instruction, and the KD loss above is applied to their cosine similarities. Only
+  the LoRA adapter (`q_proj`/`v_proj`) receives gradients; the 0.6B base stays frozen.
+  Because the persona conditions the *query side only*, documents are embedded
+  persona-free — one shared FAISS index serves all personas at inference.
 - **Guard:** report Recall@K/MRR per persona on the val set throughout training to
   catch reward hacking (an encoder that scores well on the judge rubric but retrieves
   nothing useful).
+- **Validation relevance definition:** for Recall@K/MRR, the relevant set for a
+  `(query, persona)` group is its **top-3 docs by teacher score within the judged top-20
+  candidates** — calibration-free (only the ranking among judged docs matters) and every
+  group contributes equally regardless of how the judge's absolute scores are distributed.
+  *Alternatives considered:* a score threshold (e.g. ≥ 0.7) with a top-1 fallback for
+  groups with no doc above it — semantically closer to "relevant" but sensitive to judge
+  calibration drift across groups; and strict top-1 — simpler, but brittle under near-ties
+  between the best few candidates.
+- **Circular-dependency caveat:** Recall@K here measures whether the trained retriever
+  agrees with the *same* LLM teacher that produced the training scores — not whether the
+  retrieved documents actually contain the answer to the question. This is intentional for
+  the KD objective (we want the retriever to internalise the teacher's preferences), but it
+  means Recall@K is a training-time diagnostic, not an end-to-end quality guarantee.
+  The true quality check is the ablation evaluation in [experiment-design](experiment-design.md):
+  the judge there scores faithfulness to retrieved context and answer accuracy independently,
+  which surfaces cases where the retriever found plausible-but-wrong documents.
 
 ### Stage 2 — Rewriter: DPO
 
 The trained rewriter policy is built on top of the **fixed** ROPG-KD retriever.
 
-- **Policy** — Gemma-4-E4B with a LoRA adapter. A frozen copy is the DPO reference.
-  Qwen2.5-3B is the fallback if Persian output quality is insufficient (validated by
-  smoke-testing rewrites before training).
+- **Policy** — Qwen3-4B with a LoRA adapter. A frozen copy is the DPO reference.
 - **Action** — emit a reformulated, persona-conditioned query.
 - **Preference-pair construction** — for each `(query, persona)` in the train split:
   sample N=6 rewrites from the current policy at varying temperatures (0.3–1.3) to
@@ -140,14 +167,14 @@ options in [things-to-consider](things-to-consider.md)).
 
 **Stage 1 — ROPG-KD retriever**
 
-- [ ] Validate frozen BGE-M3 on Persian (Recall@K/MRR vs BM25); commit to BGE-M3 if it matches or beats BM25
-- [ ] Run the offline scoring pipeline: for each `(query, persona, document)` triple in the train set, call the judge and store a utility score (`src/rl/scorer.py`)
-- [ ] KD-train the BGE-M3 LoRA adapter; select checkpoint on val Recall@K per persona
+- [ ] Validate frozen Qwen3-Embedding-0.6B on Persian (Recall@K/MRR vs BM25); commit to Qwen3-Embedding-0.6B if it matches or beats BM25
+- [x] Run the offline scoring pipeline: for each `(query, persona, document)` triple in the train set, call the judge and store a utility score (`notebooks/gen_ropg_data.ipynb`, mirroring `configs/datagen_ropg.yaml` → `data/ropg_kd/`)
+- [ ] KD-train the Qwen3-Embedding-0.6B LoRA adapter; select checkpoint on val Recall@K per persona
 - [ ] Freeze the ROPG-KD retriever checkpoint before Stage 2
 
 **Stage 2 — DPO rewriter**
 
-- [ ] Smoke-test Gemma-4-E4B Persian output (5–10 sample rewrites); fall back to Qwen2.5-3B if quality is poor
+- [ ] Smoke-test Qwen3-4B Persian output (5–10 sample rewrites)
 - [ ] Build the persona-conditioned preference dataset from the **train split only** ([question-extraction](question-extraction.md) questions × personas; pairs labeled by the Stage 2 judge)
 - [ ] DPO-train the rewriter LoRA against a frozen reference; low LR, 1–3 epochs
 - [ ] Select checkpoints on **validation** persona-fit (not train loss); watch for length/repetition hacking and policy degeneration

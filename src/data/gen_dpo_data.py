@@ -22,7 +22,9 @@ logger = logging.getLogger(__name__)
 class _LocalUnslothClient:
     """Thin wrapper around a loaded Unsloth model with the same .chat() interface as OpenAICompatClient."""
 
-    def __init__(self, model, tokenizer, temperature: float = 0.7, max_completion_tokens: int = 300) -> None:
+    def __init__(
+        self, model, tokenizer, temperature: float = 0.7, max_completion_tokens: int = 300
+    ) -> None:
         self.model = model
         self.tokenizer = tokenizer
         self.temperature = temperature
@@ -56,6 +58,7 @@ class _LocalUnslothClient:
 
         new_tokens = outputs[0][input_len:]
         return self.tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+
 
 JUDGE_SYSTEM = "You are an expert Persian language tutor evaluating query rewrites for a RAG retrieval system."
 

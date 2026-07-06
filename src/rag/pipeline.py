@@ -116,6 +116,7 @@ class DenseRAG(NaiveRAG):
             device=emb_cfg.get("device", "cpu"),
             batch_size=emb_cfg.get("batch_size", 32),
             fp16=emb_cfg.get("fp16", False),
+            adapter_path=emb_cfg.get("adapter_path"),
         )
         store = DenseStore(
             index_path=config["knowledge_base"]["index_path"],
@@ -133,20 +134,28 @@ class PersonaRAG(DenseRAG):
     """Rung 2: DenseRAG + persona-conditioned untrained query rewriter."""
 
     def __init__(self, config: dict) -> None:
-        from rag.rewriter import PromptedRewriter
+        from rag.rewriter import DPORewriter, PromptedRewriter
 
         rewriter_cfg = config.get("rewriter", {})
-        rewriter: PromptedRewriter | None = None
+        rewriter: PromptedRewriter | DPORewriter | None = None
         if rewriter_cfg.get("enabled", False):
-            rw_llm_cfg = rewriter_cfg.get("llm", config["llm"])
-            rw_llm = OpenAICompatClient(
-                base_url=OPENAI_BASE_URL,
-                api_key=OPENAI_API_KEY,
-                model=rw_llm_cfg["model"],
-                temperature=rw_llm_cfg.get("temperature", 0.3),
-                max_tokens=rw_llm_cfg.get("max_tokens", 200),
-            )
-            rewriter = PromptedRewriter(rw_llm)
+            if rewriter_cfg.get("type") == "dpo":
+                rewriter = DPORewriter(
+                    model_name=rewriter_cfg.get("model", "Qwen/Qwen3-4B"),
+                    adapter_path=rewriter_cfg.get("adapter_path"),
+                    device=rewriter_cfg.get("device", "cuda"),
+                    max_new_tokens=rewriter_cfg.get("max_new_tokens", 200),
+                )
+            else:
+                rw_llm_cfg = rewriter_cfg.get("llm", config["llm"])
+                rw_llm = OpenAICompatClient(
+                    base_url=OPENAI_BASE_URL,
+                    api_key=OPENAI_API_KEY,
+                    model=rw_llm_cfg["model"],
+                    temperature=rw_llm_cfg.get("temperature", 0.3),
+                    max_tokens=rw_llm_cfg.get("max_tokens", 200),
+                )
+                rewriter = PromptedRewriter(rw_llm)
 
         from rag.dense_store import DenseStore
         from rag.embedder import Qwen3Embedder
@@ -157,6 +166,7 @@ class PersonaRAG(DenseRAG):
             device=emb_cfg.get("device", "cpu"),
             batch_size=emb_cfg.get("batch_size", 32),
             fp16=emb_cfg.get("fp16", False),
+            adapter_path=emb_cfg.get("adapter_path"),
         )
         store = DenseStore(
             index_path=config["knowledge_base"]["index_path"],

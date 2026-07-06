@@ -91,9 +91,7 @@ scope:
   - Rung 3: BGE-M3 + ROPG-KD, untrained rewriter
   - Rung 4: BGE-M3 + ROPG-KD, DPO rewriter (full system)
   Rungs 3 vs 4 isolate the rewriter's marginal contribution on top of a trained retriever.
-- **DPO rewriter policy model decided: Gemma-4-E4B + LoRA.** Qwen2.5-3B is the
-  fallback if Persian output quality is insufficient (validated by smoke-testing rewrites
-  before committing to full DPO training).
+- **DPO rewriter policy model decided: Qwen3-4B + LoRA.**
 - **Training order:** ROPG-KD retriever first (retriever fixed), then DPO rewriter on
   top — ensures preference pairs for DPO are built against a stable retriever.
 

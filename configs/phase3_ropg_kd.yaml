@@ -2,13 +2,14 @@
 seed: 42
 
 knowledge_base:
-  index_path: data/index/phase1.faiss     # frozen Qwen3-Embedding-0.6B index used for candidate retrieval
-  meta_path: data/index/phase1_meta.json
+  index_path: data/index/phase3.faiss
+  meta_path: data/index/phase3_meta.json
 
 embedder:
   model: Qwen/Qwen3-Embedding-0.6B
-  device: cpu      # scorer uses CPU; change to "cuda" for training on Kaggle
+  device: cpu      # inference-side retriever; change to "cuda" if available
   batch_size: 32
+  adapter_path: data/rl/ropg_kd_checkpoints/best  # set to null for the untrained Rung-1 encoder
 
 chunking:
   chunk_size: 800
@@ -16,30 +17,6 @@ chunking:
 
 retrieval:
   top_k: 5
-
-# ── Offline scorer (run first, once) ─────────────────────────────────────────
-scorer:
-  output_path: data/rl/phase3_scored_triples.jsonl  # written by src/rl/scorer.py
-  exam_dir: data/exams/raw
-  top_k: 5   # candidate docs per (query, persona) pair
-  judge_llm:
-    model: gpt-4o-mini     # must differ in family from the eval judge
-    temperature: 0.0       # deterministic scoring
-    max_tokens: 10         # only a number is returned
-
-# ── ROPG-KD training (run on Kaggle/GPU after scoring is complete) ────────────
-ropg_kd:
-  checkpoint_dir: data/rl/ropg_kd_checkpoints   # gitignored
-  device: cuda        # override to "cpu" for testing; use "cuda" for real training
-  epochs: 3
-  batch_size: 8
-  lr: 2.0e-4
-  weight_decay: 0.01
-  kd_temperature: 1.0    # softmax temperature for soft targets and similarity logits
-  lora_r: 8
-  lora_alpha: 16
-  lora_dropout: 0.1
-  lora_target_modules: ["q_proj", "v_proj"]
 
 llm:
   model: gpt-4o-mini

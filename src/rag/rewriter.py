@@ -41,3 +41,54 @@ class PromptedRewriter:
         """Return a persona-conditioned rewrite of *query*."""
         messages = _build_rewrite_prompt(profile_rendered, query)
         return self.llm.chat(messages).strip()
+
+
+class DPORewriter:
+    """Persona-conditioned rewriter using a DPO-fine-tuned Qwen3 model."""
+
+    def __init__(
+        self,
+        model_name: str = "Qwen/Qwen3-4B",
+        adapter_path: str | None = None,
+        device: str = "cuda",
+        max_new_tokens: int = 200,
+    ) -> None:
+        from unsloth import FastLanguageModel
+
+        self.model_name = model_name
+        self.max_new_tokens = max_new_tokens
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name,
+            load_in_4bit=True,
+            max_seq_length=512,
+        )
+        if adapter_path is not None:
+            from peft import PeftModel
+
+            model = PeftModel.from_pretrained(model, adapter_path)
+        FastLanguageModel.for_inference(model)
+        self.model = model
+        self.tokenizer = tokenizer
+
+    def rewrite(self, profile_rendered: str, query: str) -> str:
+        """Return a persona-conditioned rewrite of *query*."""
+        messages = _build_rewrite_prompt(profile_rendered, query)
+        prompt_text = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+        inputs = self.tokenizer(prompt_text, return_tensors="pt").to(self.model.device)
+        outputs = self.model.generate(
+            **inputs,
+            max_new_tokens=self.max_new_tokens,
+            temperature=0.3,
+            do_sample=True,
+        )
+        decoded = self.tokenizer.decode(outputs[0], skip_special_tokens=False)
+        # Extract only the assistant response after the final marker
+        marker = "<|im_start|>assistant\n"
+        if marker in decoded:
+            decoded = decoded.rsplit(marker, 1)[-1]
+        return decoded.strip()
