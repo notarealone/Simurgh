@@ -1,14 +1,16 @@
 embedder:
   model: Qwen/Qwen3-Embedding-0.6B
   device: cpu
+  batch_size: 128
 
 retriever:
   top_k: 20
 
 judge:
-  model: gpt-5.4-mini
-  temperature: 0.0
+  model: gpt-5.4-nano
+  temperature: 1.0
   max_completion_tokens: 16
+  max_workers: 8
 
 data:
   chunks: data/chunks/corpus.jsonl

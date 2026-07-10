@@ -7,10 +7,12 @@ import json
 import logging
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
 import yaml
+from tqdm import tqdm
 
 from data.settings import OPENAI_API_KEY, OPENAI_BASE_URL
 from personalization.profiles import render_profile, train_personas
@@ -73,21 +75,42 @@ def _build_judge_messages(
     ]
 
 
+def _score_one_chunk(
+    judge: OpenAICompatClient,
+    query: str,
+    persona_rendered: str,
+    cid: str,
+    ctext: str,
+) -> dict:
+    messages = _build_judge_messages(query, persona_rendered, ctext)
+    try:
+        response = judge.chat(messages)
+        score = _parse_float_score(response)
+    except Exception:
+        logger.warning("Judge call failed for chunk %s", cid, exc_info=True)
+        score = 0.0
+    return {"chunk_id": cid, "text": ctext, "teacher_score": score}
+
+
 def _score_chunks(
     judge: OpenAICompatClient,
     query: str,
     persona_rendered: str,
     chunk_ids: list[str],
     chunk_texts: list[str],
+    max_workers: int = 8,
 ) -> list[dict]:
-    """Score each chunk with the LLM judge. Returns docs ordered by input rank."""
-    docs: list[dict] = []
-    for cid, ctext in zip(chunk_ids, chunk_texts, strict=True):
-        messages = _build_judge_messages(query, persona_rendered, ctext)
-        response = judge.chat(messages)
-        score = _parse_float_score(response)
-        docs.append({"chunk_id": cid, "text": ctext, "teacher_score": score})
-    return docs
+    """Score chunks in parallel. Returns docs in the same order as input."""
+    results: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_cid = {
+            executor.submit(_score_one_chunk, judge, query, persona_rendered, cid, ctext): cid
+            for cid, ctext in zip(chunk_ids, chunk_texts, strict=True)
+        }
+        for future in as_completed(future_to_cid):
+            doc = future.result()
+            results[doc["chunk_id"]] = doc
+    return [results[cid] for cid in chunk_ids]
 
 
 def _load_split_qids(split_path: Path) -> list[tuple[str, str, str]]:
@@ -146,6 +169,7 @@ def run(config_path: str | Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     top_k = cfg["retriever"]["top_k"]
+    max_workers = cfg["judge"].get("max_workers", 8)
 
     logger.info("Loading corpus from %s", corpus_path)
     chunk_ids, chunk_texts = _load_corpus(corpus_path)
@@ -185,32 +209,61 @@ def run(config_path: str | Path) -> None:
         logger.info("Processing %s split → %s", split, output_path)
 
         entries = _load_split_qids(split_path)
-        with output_path.open("w", encoding="utf-8") as out_fh:
+
+        # Build resume set from existing output
+        seen: set[tuple[str, str]] = set()
+        if output_path.exists():
+            for raw in output_path.read_text(encoding="utf-8").splitlines():
+                if not raw.strip():
+                    continue
+                try:
+                    rec = json.loads(raw)
+                    seen.add((rec["query"], rec["persona_id"]))
+                except (json.JSONDecodeError, KeyError):
+                    pass
+            if seen:
+                logger.info("Resuming %s: %d records already written", split, len(seen))
+
+        with output_path.open("a", encoding="utf-8") as out_fh:
+            # Pre-load all valid question stems for this split
+            valid_entries: list[tuple[str, str, str, str]] = []
             for exam_stem, qid, raw_line in entries:
                 try:
                     query = _load_question(exam_stem, qid, questions_dir)
+                    valid_entries.append((exam_stem, qid, raw_line, query))
                 except (FileNotFoundError, KeyError) as exc:
                     logger.warning("Skipping %s: %s", raw_line, exc)
-                    continue
 
-                for persona in train_profiles:
-                    persona_rendered = render_profile(persona.id)
-                    query_vec = embedder.encode_query(
-                        texts=[query],
-                        instruction=persona_rendered,
-                    )
+            for persona in train_profiles:
+                persona_rendered = render_profile(persona.id)
+                todo = [
+                    (i, e)
+                    for i, e in enumerate(valid_entries)
+                    if (e[3], persona.id) not in seen
+                ]
+                if not todo:
+                    continue
+                query_vecs = embedder.encode_query(
+                    [e[3] for _, e in todo],
+                    instruction=persona_rendered,
+                )
+                for j, (_, (_, _, _raw_line, query)) in enumerate(
+                    tqdm(todo, desc=f"{split}/{persona.id}", unit="q")
+                ):
+                    query_vec = query_vecs[j : j + 1]
                     top_ids, top_texts = _retrieve_top_k(
                         query_vec, chunk_matrix, top_k, chunk_ids, chunk_texts
                     )
-                    docs = _score_chunks(judge, query, persona_rendered, top_ids, top_texts)
+                    docs = _score_chunks(
+                        judge, query, persona_rendered, top_ids, top_texts, max_workers
+                    )
                     rec = {
                         "query": query,
                         "persona_id": persona.id,
                         "docs": docs,
                     }
                     out_fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-
-                logger.info("Processed %s (%s)", raw_line, split)
+                    out_fh.flush()
 
 
 def main() -> None:
