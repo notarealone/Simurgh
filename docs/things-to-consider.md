@@ -30,9 +30,10 @@
 ## Dataset Creation
 
 - [x] Synthetic personas (LLM-generated); no real student data
-- [x] Domain — 9th-grade Persian; questions from real exams ([question-extraction](question-extraction.md))
+- [x] Domain — 9th-grade Persian; questions from real exams + LLM-generated synthetic questions ([question-extraction](question-extraction.md))
 - [ ] Ground questions to corpus passages; tag grounded-vs-skill and personalization-headroom
-- [ ] Set dataset size; data-scarcity mitigations (scrape exams, synth corpus-grounded Qs) tracked in [experiment-design](experiment-design.md)
+- [x] Synthesize corpus-grounded questions — done: `data/questions/ai_generated_questions.json`
+- [ ] Set dataset size; remaining data-scarcity mitigations (scrape more exam papers) tracked in [experiment-design](experiment-design.md)
 
 ## Open Questions
 

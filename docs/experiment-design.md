@@ -7,7 +7,7 @@
 ## Datasets
 
 - **Domain** — 9th-grade Persian (فارسی نهم). Corpus: official textbook + gifted-schools edition + study guide (provenance in [data-extraction](data-extraction.md)).
-- **Questions** — extracted from real exam papers into structured JSON (schema + provenance in [question-extraction](question-extraction.md)); ~130 questions across 6 sources so far.
+- **Questions** — extracted from real exam papers into structured JSON (schema + provenance in [question-extraction](question-extraction.md)); ~618 questions across 7 sources: 6 real exam papers + `ai_generated_questions.json` (LLM-generated, curriculum-grounded, added to improve data quantity and lesson coverage).
 - **Profiles** — synthetic learner personas (LLM-as-simulator; no real student data). A fixed set of 4 over 4 axes (comprehension, prior knowledge, learning goal, explanation style); 3 train + 1 test-holdout. Full schema in [personas](personas.md).
 - **Grounding** — link each question to its answering corpus passage(s): gold passages for Recall@K and context for generation. Tag each question **grounded vs skill** and by **personalization headroom** — pure recall/grammar items carry little persona-fit signal; comprehension items carry the most.
 
@@ -15,7 +15,9 @@ Data is scarce, which constrains eval diversity and DPO volume. Mitigations to d
 pursue as needed (not core scope yet):
 
 - [ ] Scrape more exam papers (real questions + gold answers via the [question-extraction](question-extraction.md) VLM pipeline) — highest ROI
-- [ ] Synthesize corpus-grounded questions with a big model (yields the gold-passage link for free)
+- [x] Synthesize corpus-grounded questions — done: `data/questions/ai_generated_questions.json`
+      (LLM-generated, 9th-grade Persian curriculum; enters the question-level split pool
+      alongside real exam files)
 - [ ] Persona-multiply for eval coverage; sample multiple DPO pairs per (question, persona)
 
 ## Baselines

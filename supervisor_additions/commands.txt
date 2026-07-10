@@ -1,0 +1,13 @@
+pip install torch sentence-transformers peft pyyaml tqdm
+
+pip uninstall torch torchvision torchaudio
+
+pip install torch==2.11.0  --index-url https://download.pytorch.org/whl/cu128
+
+python ropg_kd.py --config config.yaml   # bad
+
+
+python train_embedding.py     --model_name Qwen/Qwen3-Embedding-0.6B     --train_data .     --output_dir ./qwen3-embed-ropg-kd     --mode reader_kd     --num_epochs 3     --batch_size 2     --learning_rate 2e-5     --temperature 1.0     --max_documents 20     --use_amp
+
+
+python train_embedding.py     --model_name Qwen/Qwen3-Embedding-0.6B     --train_data .     --output_dir ./qwen3-embed-ropg-kd     --mode reader_kd     --num_epochs 3     --batch_size 2     --learning_rate 2e-5     --temperature 1.0     --max_documents 20     --use_amp  --eval_top_k 5 --eval_batch_size 1  --best_metric mrr

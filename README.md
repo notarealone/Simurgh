@@ -39,12 +39,13 @@ I am the sole author of this thesis. I design the research methodology, set the 
 ## Project Structure
 
 ```
-docs/                Thesis documentation (proposal, lit review, methodology)
-src/                 Source code (rag, rl, personalization, data)
-configs/             Experiment configurations
-benchmarks/          Evaluation scripts
-notebooks/           Jupyter notebooks for exploration
-app/                 Web demo (framework TBD)
+docs/                  Thesis documentation (proposal, lit review, methodology)
+src/                   Source code (rag, rl, personalization, data)
+configs/               Experiment configurations
+benchmarks/            Evaluation scripts
+notebooks/             Jupyter notebooks for exploration
+app/                   Web demo (framework TBD)
+supervisor_additions/  Scripts and data from supervisor Ali Edalat (project scaffolding)
 ```
 
 ## Setup

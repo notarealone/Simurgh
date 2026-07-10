@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import random
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -220,36 +221,59 @@ def chunk_gifted(raw: str) -> list[dict]:
     return chunks
 
 
-def generate_splits(questions_dir: Path, output_dir: Path) -> None:
-    split_map = {
-        "train": [
-            "khordad-1402-arzeshyabi-ostani",
-            "midterm-unknown_1",
-            "keshvari-unknown_1",
-        ],
-        "val": [
-            "khordad1403-keshvari",
-        ],
-        "test": [
-            "khordad1404-keshvari",
-            "khordad1404-khorasan",
-        ],
-    }
+_FIXED_EXAM_SPLITS: dict[str, list[str]] = {
+    "train": ["khordad-1402-arzeshyabi-ostani", "midterm-unknown_1", "keshvari-unknown_1"],
+    "val": ["khordad1403-keshvari"],
+    "test": ["khordad1404-keshvari", "khordad1404-khorasan"],
+}
 
+
+def generate_splits(
+    questions_dir: Path,
+    output_dir: Path,
+    seed: int = 42,
+    ratios: tuple[float, float, float] = (0.70, 0.15, 0.15),
+    fixed_exam_splits: bool = False,
+) -> None:
     splits_dir = output_dir / "splits"
     splits_dir.mkdir(parents=True, exist_ok=True)
 
-    for split_name, stems in split_map.items():
-        qids: list[str] = []
-        for stem in stems:
-            path = questions_dir / f"{stem}.json"
-            if not path.exists():
-                logger.warning("Question file not found: %s", path)
-                continue
-            data = json.loads(path.read_text(encoding="utf-8"))
-            for q in data.get("questions", []):
-                qid = f"{stem}:{q['id']}"
-                qids.append(qid)
+    fixed_qids: dict[str, list[str]] = {"train": [], "val": [], "test": []}
+    fixed_stems: set[str] = set()
+    if fixed_exam_splits:
+        for split_name, stems in _FIXED_EXAM_SPLITS.items():
+            for stem in stems:
+                path = questions_dir / f"{stem}.json"
+                if not path.exists():
+                    logger.warning("Fixed exam file not found: %s", path)
+                    continue
+                data = json.loads(path.read_text(encoding="utf-8"))
+                for q in data.get("questions", []):
+                    fixed_qids[split_name].append(f"{stem}:{q['id']}")
+                fixed_stems.add(stem)
+
+    free_qids: list[str] = []
+    for fpath in sorted(questions_dir.glob("*.json")):
+        if fpath.stem in fixed_stems:
+            continue
+        data = json.loads(fpath.read_text(encoding="utf-8"))
+        for q in data.get("questions", []):
+            free_qids.append(f"{fpath.stem}:{q['id']}")
+
+    rng = random.Random(seed)
+    rng.shuffle(free_qids)
+
+    n = len(free_qids)
+    n_train = int(n * ratios[0])
+    n_val = int(n * ratios[1])
+
+    split_qids: dict[str, list[str]] = {
+        "train": fixed_qids["train"] + free_qids[:n_train],
+        "val": fixed_qids["val"] + free_qids[n_train : n_train + n_val],
+        "test": fixed_qids["test"] + free_qids[n_train + n_val :],
+    }
+
+    for split_name, qids in split_qids.items():
         output_path = splits_dir / f"{split_name}_qids.txt"
         output_path.write_text("\n".join(qids) + "\n", encoding="utf-8")
         logger.info("Wrote %d qids to %s", len(qids), output_path)
@@ -275,6 +299,30 @@ def main() -> None:
         default=Path("data/questions"),
         help="Directory containing question JSON files",
     )
+    parser.add_argument(
+        "--splits-only",
+        action="store_true",
+        help="Skip corpus chunking; only regenerate split files",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for question-level shuffling (default: 42)",
+    )
+    parser.add_argument(
+        "--ratios",
+        nargs=3,
+        type=float,
+        default=[0.70, 0.15, 0.15],
+        metavar=("TRAIN", "VAL", "TEST"),
+        help="Train/val/test split ratios (default: 0.70 0.15 0.15)",
+    )
+    parser.add_argument(
+        "--fixed-exam-splits",
+        action="store_true",
+        help="Pin real exam files to their designated splits; only randomize remaining files",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -285,31 +333,38 @@ def main() -> None:
     for d in ["data/splits", "data/ropg_kd", "data/dpo"]:
         Path(d).mkdir(parents=True, exist_ok=True)
 
-    source_configs = [
-        ("farsi-9th-grade-textbook.md", "textbook", chunk_textbook),
-        ("farsi-9th-grade-study-guide.md", "study-guide", chunk_study_guide),
-        ("farsi-9th-grade-gifted-textbook.md", "gifted", chunk_gifted),
-    ]
+    if not args.splits_only:
+        source_configs = [
+            ("farsi-9th-grade-textbook.md", "textbook", chunk_textbook),
+            ("farsi-9th-grade-study-guide.md", "study-guide", chunk_study_guide),
+            ("farsi-9th-grade-gifted-textbook.md", "gifted", chunk_gifted),
+        ]
 
-    all_chunks: list[dict] = []
+        all_chunks: list[dict] = []
 
-    for filename, source_name, chunk_fn in source_configs:
-        path = args.raw_dir / filename
-        if not path.exists():
-            logger.warning("Source file not found: %s", path)
-            continue
-        raw = path.read_text(encoding="utf-8")
-        raw = _strip_html(raw)
-        chunks = chunk_fn(raw)
-        logger.info("Source %s: %d chunks", source_name, len(chunks))
-        all_chunks.extend(chunks)
+        for filename, source_name, chunk_fn in source_configs:
+            path = args.raw_dir / filename
+            if not path.exists():
+                logger.warning("Source file not found: %s", path)
+                continue
+            raw = path.read_text(encoding="utf-8")
+            raw = _strip_html(raw)
+            chunks = chunk_fn(raw)
+            logger.info("Source %s: %d chunks", source_name, len(chunks))
+            all_chunks.extend(chunks)
 
-    with open(args.output, "w", encoding="utf-8") as f:
-        for chunk in all_chunks:
-            f.write(json.dumps(chunk, ensure_ascii=False) + "\n")
-    logger.info("Wrote %d total chunks to %s", len(all_chunks), args.output)
+        with open(args.output, "w", encoding="utf-8") as f:
+            for chunk in all_chunks:
+                f.write(json.dumps(chunk, ensure_ascii=False) + "\n")
+        logger.info("Wrote %d total chunks to %s", len(all_chunks), args.output)
 
-    generate_splits(args.questions_dir, args.output.parent.parent)
+    generate_splits(
+        args.questions_dir,
+        args.output.parent.parent,
+        seed=args.seed,
+        ratios=tuple(args.ratios),
+        fixed_exam_splits=args.fixed_exam_splits,
+    )
 
 
 if __name__ == "__main__":

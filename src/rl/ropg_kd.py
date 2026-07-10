@@ -20,12 +20,14 @@ Typical usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import math
 import os
 import random
 import shutil
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -123,7 +125,7 @@ def encode_docs_chunked(st_model, texts: list[str], device: str, micro_batch: in
     return torch.cat(vecs, dim=0)
 
 
-# ── Validation ────────────────────────────────────────────────────────────────
+# ── Loss & validation ─────────────────────────────────────────────────────────
 
 
 def _kd_loss(q_vec: torch.Tensor, d_vecs: torch.Tensor, scores: torch.Tensor, temperature: float):
@@ -145,6 +147,7 @@ def evaluate(
     top_k: int,
     relevance_top_m: int,
     corpus_batch: int = 32,
+    amp_dtype: torch.dtype | None = None,
 ) -> dict:
     """Run validation: mean KD loss over val groups, plus Recall@K / MRR per persona and overall.
 
@@ -155,9 +158,8 @@ def evaluate(
     import torch
 
     st_model.eval()
-    # Autocast keeps validation within T4 memory; embeddings are cast back to fp32
-    # inside encode_texts before any similarity math.
-    with torch.no_grad(), torch.autocast("cuda", enabled=device == "cuda"):
+    _amp_dtype = amp_dtype if amp_dtype is not None else torch.float16
+    with torch.no_grad(), torch.autocast("cuda", enabled=device == "cuda", dtype=_amp_dtype):
         # Re-embed the full corpus with the current model. Group docs *are* corpus
         # chunks, so their embeddings are looked up from this matrix by chunk_id
         # instead of being re-encoded per group (re-encoding ~20 docs x 48 groups
@@ -288,10 +290,24 @@ def _is_better(candidate: dict, current_best: dict | None) -> bool:
 # ── Training ──────────────────────────────────────────────────────────────────
 
 
+class KDGroupDataset:
+    """Wraps a list of ROPG training groups for use with torch DataLoader."""
+
+    def __init__(self, groups: list[dict]) -> None:
+        self.groups = groups
+
+    def __len__(self) -> int:
+        return len(self.groups)
+
+    def __getitem__(self, idx: int) -> dict:
+        return self.groups[idx]
+
+
 def train(config: dict) -> None:
     import torch
     from peft import LoraConfig, TaskType, get_peft_model
     from sentence_transformers import SentenceTransformer
+    from torch.utils.data import DataLoader
     from tqdm import tqdm
     from transformers import get_linear_schedule_with_warmup
 
@@ -311,22 +327,38 @@ def train(config: dict) -> None:
 
     device = train_cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu")
     precision = train_cfg.get("precision", "fp32")
-    use_amp = device == "cuda" and precision == "fp16"
-    logger.info("Device: %s | precision: %s | amp: %s", device, precision, use_amp)
+    # use_amp fires for both fp16 and bf16; GradScaler only needed for fp16
+    use_amp = device == "cuda" and precision in ("fp16", "bf16")
+    # bf16 Tensor Cores need Ampere+ (compute capability >= 8); fall back to fp16 on T4/V100
+    if device == "cuda" and torch.cuda.is_available():
+        model_dtype = (
+            torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+        )
+    else:
+        model_dtype = torch.float32
+    amp_dtype = torch.bfloat16 if precision == "bf16" else torch.float16
+    logger.info(
+        "Device: %s | precision: %s | model_dtype: %s | amp: %s",
+        device,
+        precision,
+        model_dtype,
+        use_amp,
+    )
 
     # Load data.
     train_groups = load_groups(data_cfg["train_path"])
     val_groups = load_groups(data_cfg["val_path"])
     corpus = load_corpus(data_cfg["corpus_path"])
 
-    # Load the encoder and wrap with a LoRA adapter. Weights stay fp32 even under
-    # precision=fp16: GradScaler cannot unscale fp16 gradients, so fp16 applies to
-    # the autocast forward pass only (the standard AMP recipe).
     model_name = emb_cfg.get("model", "Qwen/Qwen3-Embedding-0.6B")
     attn_impl = emb_cfg.get("attn_implementation", "sdpa")
+    # Load base model in half precision: cuts weight memory ~50%. LoRA adapter weights
+    # are cast back to fp32 below so the optimizer and gradient math stay stable.
     st_model = SentenceTransformer(
-        model_name, device=device, trust_remote_code=True,
-        model_kwargs={"attn_implementation": attn_impl},
+        model_name,
+        device=device,
+        trust_remote_code=True,
+        model_kwargs={"attn_implementation": attn_impl, "torch_dtype": model_dtype},
     )
     # get_peft_model injects the LoRA layers and freezes the base weights *in place*
     # on the passed model, so SentenceTransformer's forward path trains through them
@@ -345,10 +377,15 @@ def train(config: dict) -> None:
     )
     peft_model.print_trainable_parameters()
 
-    # One KD step keeps the activation graphs of a query + ~20 docs alive until the
-    # backward pass, which OOMs a 16 GB T4 without checkpointing. use_reentrant=False
-    # lets gradients flow even though only the LoRA params require grad.
-    # set gradient_checkpointing: true in config if OOM
+    # Base model is in half precision (frozen). LoRA adapter weights must stay fp32
+    # so the optimizer and gradient accumulation are numerically stable.
+    for param in peft_model.parameters():
+        if param.requires_grad:
+            param.data = param.data.to(torch.float32)
+
+    # One KD step keeps the activation graphs of a query + docs alive until the
+    # backward pass; use_reentrant=False lets gradients flow through frozen base layers
+    # to the LoRA params. Set gradient_checkpointing: true in config if OOM.
     if train_cfg.get("gradient_checkpointing", False):
         st_model[0].auto_model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": False}
@@ -395,11 +432,24 @@ def train(config: dict) -> None:
         num_warmup_steps=int(total_steps * warmup_ratio),
         num_training_steps=total_steps,
     )
-    scaler = torch.amp.GradScaler("cuda") if use_amp else None
+    # GradScaler only for fp16; bf16 has sufficient dynamic range without it
+    scaler = torch.amp.GradScaler("cuda") if (use_amp and precision == "fp16") else None
 
     top_k = eval_cfg.get("top_k", 5)
     relevance_top_m = eval_cfg.get("relevance_top_m", 3)
     doc_micro_batch = train_cfg.get("doc_micro_batch", 8)
+
+    # DataLoader batches batch_size groups per step; workers prefetch while GPU computes.
+    _num_workers = 2 if sys.platform != "darwin" else 0
+    train_loader = DataLoader(
+        KDGroupDataset(train_groups),
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=_num_workers,
+        collate_fn=list,
+        prefetch_factor=2 if _num_workers > 0 else None,
+        persistent_workers=_num_workers > 0,
+    )
 
     if device == "cuda":
         torch.cuda.reset_peak_memory_stats()
@@ -407,7 +457,15 @@ def train(config: dict) -> None:
     # Epoch-0 baseline: validate the frozen (untrained) encoder before any training step.
     logger.info("Running epoch-0 baseline validation (frozen encoder)...")
     baseline_metrics = evaluate(
-        st_model, val_groups, corpus, device, kd_temp, top_k, relevance_top_m, doc_micro_batch
+        st_model,
+        val_groups,
+        corpus,
+        device,
+        kd_temp,
+        top_k,
+        relevance_top_m,
+        doc_micro_batch,
+        amp_dtype=amp_dtype,
     )
 
     epoch_metrics: list[dict] = []
@@ -415,48 +473,80 @@ def train(config: dict) -> None:
     best_epoch = 0
 
     for epoch in range(1, n_epochs + 1):
-        random.shuffle(train_groups)
         st_model.train()
         epoch_loss = 0.0
         n_groups_seen = 0
 
-        optimizer.zero_grad()
-        for i, group in enumerate(tqdm(train_groups, desc=f"Epoch {epoch}/{n_epochs}")):
-            docs = sorted(group["docs"], key=lambda d: d["teacher_score"], reverse=True)[:8]
-            scores = torch.tensor(
-                [d["teacher_score"] for d in docs], device=device, dtype=torch.float32
+        for mini_batch in tqdm(train_loader, desc=f"Epoch {epoch}/{n_epochs}"):
+            # Collect all doc texts and scores up front so they can be encoded in one
+            # chunked call instead of one call per group (reduces Python overhead and
+            # gives encode_docs_chunked larger, GPU-friendly batches).
+            by_persona: dict[str, list[tuple[int, str]]] = {}
+            all_doc_texts: list[str] = []
+            doc_offsets: list[tuple[int, int]] = []
+            all_scores_list: list[torch.Tensor] = []
+
+            for gi, group in enumerate(mini_batch):
+                by_persona.setdefault(group["persona_id"], []).append((gi, group["query"]))
+                docs = sorted(group["docs"], key=lambda d: d["teacher_score"], reverse=True)[:8]
+                doc_offsets.append((len(all_doc_texts), len(docs)))
+                all_doc_texts.extend(d["text"] for d in docs)
+                all_scores_list.append(
+                    torch.tensor(
+                        [d["teacher_score"] for d in docs], device=device, dtype=torch.float32
+                    )
+                )
+
+            ctx = (
+                torch.amp.autocast("cuda", dtype=amp_dtype)
+                if use_amp
+                else contextlib.nullcontext()
             )
-            doc_texts = [d["text"] for d in docs]
-            instruction = render_profile(group["persona_id"])
+            with ctx:
+                # Encode queries in sub-batches grouped by persona so all queries in
+                # a sub-batch share the same instruction prefix and prompt_length.
+                q_vecs: list[torch.Tensor | None] = [None] * len(mini_batch)
+                for persona_id, idx_queries in by_persona.items():
+                    idxs, queries = zip(*idx_queries, strict=True)
+                    vecs = encode_texts(
+                        st_model,
+                        list(queries),
+                        device,
+                        instruction=render_profile(persona_id),
+                    )
+                    for gi, vec in zip(idxs, vecs, strict=True):
+                        q_vecs[gi] = vec
+
+                # Encode all docs from the batch in one chunked call.
+                all_d_vecs = encode_docs_chunked(st_model, all_doc_texts, device, doc_micro_batch)
+
+                # Sum per-group KD losses; single backward per optimizer step replaces
+                # the old gradient-accumulation pattern (was 1 backward per group).
+                step_loss = sum(
+                    _kd_loss(
+                        q_vecs[gi].unsqueeze(0),
+                        all_d_vecs[offset : offset + n],
+                        all_scores_list[gi],
+                        kd_temp,
+                    )
+                    for gi, (offset, n) in enumerate(doc_offsets)
+                ) / len(mini_batch)
 
             if use_amp:
-                with torch.amp.autocast("cuda"):
-                    q_vec = encode_texts(
-                        st_model, [group["query"]], device, instruction=instruction
-                    )
-                    d_vecs = encode_docs_chunked(st_model, doc_texts, device, doc_micro_batch)
-                    loss = _kd_loss(q_vec, d_vecs, scores, kd_temp) / batch_size
-                scaler.scale(loss).backward()
+                scaler.scale(step_loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(trainable_params, grad_clip)
+                scaler.step(optimizer)
+                scaler.update()
             else:
-                q_vec = encode_texts(st_model, [group["query"]], device, instruction=instruction)
-                d_vecs = encode_docs_chunked(st_model, doc_texts, device, doc_micro_batch)
-                loss = _kd_loss(q_vec, d_vecs, scores, kd_temp) / batch_size
-                loss.backward()
+                step_loss.backward()
+                torch.nn.utils.clip_grad_norm_(trainable_params, grad_clip)
+                optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad(set_to_none=True)
 
-            epoch_loss += loss.item() * batch_size
-            n_groups_seen += 1
-
-            if n_groups_seen % batch_size == 0 or i == len(train_groups) - 1:
-                if use_amp:
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(trainable_params, grad_clip)
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    torch.nn.utils.clip_grad_norm_(trainable_params, grad_clip)
-                    optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad()
+            epoch_loss += step_loss.item() * len(mini_batch)
+            n_groups_seen += len(mini_batch)
 
         avg_train_loss = epoch_loss / max(n_groups_seen, 1)
         logger.info("Epoch %d/%d | avg train KL loss: %.4f", epoch, n_epochs, avg_train_loss)
@@ -469,7 +559,15 @@ def train(config: dict) -> None:
             )
             torch.cuda.empty_cache()
         val_metrics = evaluate(
-            st_model, val_groups, corpus, device, kd_temp, top_k, relevance_top_m, doc_micro_batch
+            st_model,
+            val_groups,
+            corpus,
+            device,
+            kd_temp,
+            top_k,
+            relevance_top_m,
+            doc_micro_batch,
+            amp_dtype=amp_dtype,
         )
         val_metrics["epoch"] = epoch
         val_metrics["train_kd_loss"] = avg_train_loss

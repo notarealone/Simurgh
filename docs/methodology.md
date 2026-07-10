@@ -149,6 +149,14 @@ The trained rewriter policy is built on top of the **fixed** ROPG-KD retriever.
   batch discount. The proxy judge's predicted retrieval quality is a practical
   substitute: rewrite framing and vocabulary are the primary lever for which passage
   depth is retrieved, and the judge can evaluate this without running the full pipeline.
+
+  *Rewriter model note:* The initial implementation generated rewrites with a local
+  Gemma-4-E4B model (via Unsloth, 4-bit quantised) to avoid API costs. Rewrite
+  quality was insufficient — the quantised model produced repetitive or poorly
+  personalised rewrites — so the rewriter was replaced with a remote Grok model
+  (`grok-4-1-fast`), which is a different model family from the judge. The judge
+  independence rule (judge that labels pairs ≠ judge that scores evaluation results)
+  still holds; the rewriter is not a judge.
 - **Algorithm** — DPO over the LoRA adapter. Optional SFT warmup if DPO from the base
   policy proves unstable.
 - **Judge independence:** the judge that labels DPO pairs must differ in family from the

@@ -21,3 +21,7 @@ OPENAI_BASE_URL: str | None = os.environ.get("OPENAI_BASE_URL")
 # Gemini judge credentials.
 GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_ENDPOINT: str | None = os.environ.get("GEMINI_ENDPOINT")
+
+# Rewriter credentials (separate from judge; e.g. xAI/Grok endpoint).
+REWRITER_API_KEY: str = os.environ.get("REWRITER_API_KEY", "")
+REWRITER_BASE_URL: str | None = os.environ.get("REWRITER_BASE_URL")

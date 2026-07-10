@@ -7,11 +7,14 @@ import json
 import logging
 import random
 import re
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import yaml
+from tqdm import tqdm
 
-from data.settings import OPENAI_API_KEY, OPENAI_BASE_URL
+from data.settings import OPENAI_API_KEY, OPENAI_BASE_URL, REWRITER_API_KEY, REWRITER_BASE_URL
 from personalization.profiles import render_profile, train_personas
 from rag.llm import OpenAICompatClient
 from rag.rewriter import PromptedRewriter
@@ -19,45 +22,7 @@ from rag.rewriter import PromptedRewriter
 logger = logging.getLogger(__name__)
 
 
-class _LocalUnslothClient:
-    """Thin wrapper around a loaded Unsloth model with the same .chat() interface as OpenAICompatClient."""
 
-    def __init__(
-        self, model, tokenizer, temperature: float = 0.7, max_completion_tokens: int = 300
-    ) -> None:
-        self.model = model
-        self.tokenizer = tokenizer
-        self.temperature = temperature
-        self.max_completion_tokens = max_completion_tokens
-
-    def chat(self, messages: list[dict[str, str]]) -> str:
-        # Gemma-4 requires content as a list of typed parts, not a plain string
-        gemma_messages = [
-            {"role": m["role"], "content": [{"type": "text", "text": m["content"]}]}
-            for m in messages
-        ]
-
-        inputs = self.tokenizer.apply_chat_template(
-            gemma_messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt",
-        ).to("cuda")
-
-        input_len = inputs["input_ids"].shape[1]
-        outputs = self.model.generate(
-            **inputs,
-            max_new_tokens=self.max_completion_tokens,
-            temperature=self.temperature if self.temperature > 0 else 1.0,
-            top_p=0.95,
-            top_k=64,
-            do_sample=self.temperature > 0,
-            use_cache=True,
-        )
-
-        new_tokens = outputs[0][input_len:]
-        return self.tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
 
 JUDGE_SYSTEM = "You are an expert Persian language tutor evaluating query rewrites for a RAG retrieval system."
@@ -91,6 +56,43 @@ def _parse_score(response: str) -> float:
         logger.warning("Could not extract score from judge response: %r", response[:200])
         return 0.0
     return max(0.0, min(1.0, float(match.group())))
+
+
+def _run_one_combo(
+    persona_id: str,
+    temp: float,
+    rewriter_client: OpenAICompatClient,
+    judge_client: OpenAICompatClient,
+    persona_rendered: str,
+    query: str,
+    exam_stem: str,
+    qid: str,
+) -> tuple[str, str | None, float]:
+    """Generate one rewrite and score it. Returns (persona_id, rewrite_or_None, score)."""
+    try:
+        rewriter = PromptedRewriter(rewriter_client)
+        rewrite = rewriter.rewrite(persona_rendered, query)
+    except Exception:
+        logger.warning(
+            "Rewrite failed for %s:%s persona=%s temp=%.1f",
+            exam_stem, qid, persona_id, temp,
+            exc_info=True,
+        )
+        return persona_id, None, 0.0
+
+    try:
+        messages = _build_judge_messages(persona_rendered, query, rewrite)
+        response = judge_client.chat(messages)
+        score = _parse_score(response)
+    except Exception:
+        logger.warning(
+            "Judge failed for %s:%s persona=%s temp=%.1f",
+            exam_stem, qid, persona_id, temp,
+            exc_info=True,
+        )
+        score = 0.0
+
+    return persona_id, rewrite, score
 
 
 def _index_questions(questions_dir: Path) -> dict[str, Path]:
@@ -147,7 +149,7 @@ def main() -> None:
     data_cfg = config["data"]
     cross_threshold = config["cross_persona_threshold"]
 
-    temperatures: list[float] = rewriter_cfg.get("temperatures", [0.3, 0.5, 0.7, 0.9, 1.1, 1.3])
+    temperatures: list[float] = rewriter_cfg.get("temperatures", [0.1, 0.4, 0.8, 1.1])
 
     questions_dir = Path(data_cfg["questions_dir"])
     splits_dir = Path(data_cfg["splits_dir"])
@@ -161,25 +163,16 @@ def main() -> None:
 
     persona_ids = [p.id for p in train_personas()]
 
-    from unsloth import FastModel
+    max_workers: int = rewriter_cfg.get("max_workers", 4)
 
-    logger.info("Loading rewriter model %s via Unsloth...", rewriter_cfg["model"])
-    rw_model, rw_tokenizer = FastModel.from_pretrained(
-        model_name=rewriter_cfg["model"],
-        dtype=None,
-        max_seq_length=512,
-        load_in_4bit=True,
-        full_finetuning=False,
-        device_map="balanced",
-    )
-    logger.info("Rewriter model loaded.")
-
+    logger.info("Initialising remote rewriter (%s) at %s", rewriter_cfg["model"], REWRITER_BASE_URL)
     rewriter_clients = {
-        temp: _LocalUnslothClient(
-            model=rw_model,
-            tokenizer=rw_tokenizer,
+        temp: OpenAICompatClient(
+            base_url=REWRITER_BASE_URL,
+            api_key=REWRITER_API_KEY,
+            model=rewriter_cfg["model"],
             temperature=temp,
-            max_completion_tokens=rewriter_cfg["max_completion_tokens"],
+            max_tokens=rewriter_cfg["max_completion_tokens"],
         )
         for temp in temperatures
     }
@@ -207,7 +200,7 @@ def main() -> None:
         records_written = 0
 
         with output_path.open("w", encoding="utf-8") as fh:
-            for exam_stem, qid in qid_pairs:
+            for exam_stem, qid in tqdm(qid_pairs, desc=split_name, unit="q"):
                 exam_file = questions_map.get(exam_stem)
                 if exam_file is None:
                     logger.warning("Exam file not found for stem %r", exam_stem)
@@ -227,52 +220,38 @@ def main() -> None:
                     split_name,
                 )
 
+                combos = [(pid, temp) for pid in persona_ids for temp in temperatures]
+                candidates_by_persona: dict[str, list[tuple[str, float]]] = defaultdict(list)
+
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    future_to_combo = {
+                        executor.submit(
+                            _run_one_combo,
+                            pid,
+                            temp,
+                            rewriter_clients[temp],
+                            judge_client,
+                            render_profile(pid),
+                            query,
+                            exam_stem,
+                            qid,
+                        ): (pid, temp)
+                        for pid, temp in combos
+                    }
+                    for future in as_completed(future_to_combo):
+                        pid, rewrite, score = future.result()
+                        if rewrite is not None:
+                            candidates_by_persona[pid].append((rewrite, score))
+
                 best_for_persona: dict[str, str] = {}
                 best_score_for_persona: dict[str, float] = {}
 
                 for persona_id in persona_ids:
-                    persona_rendered = render_profile(persona_id)
-                    candidates: list[tuple[str, float]] = []
-
-                    for temp in temperatures:
-                        rewriter = PromptedRewriter(rewriter_clients[temp])
-
-                        try:
-                            rewrite = rewriter.rewrite(persona_rendered, query)
-                        except Exception:
-                            logger.warning(
-                                "Rewrite failed for %s:%s persona=%s temp=%.1f",
-                                exam_stem,
-                                qid,
-                                persona_id,
-                                temp,
-                                exc_info=True,
-                            )
-                            continue
-
-                        try:
-                            messages = _build_judge_messages(persona_rendered, query, rewrite)
-                            response = judge_client.chat(messages)
-                            score = _parse_score(response)
-                        except Exception:
-                            logger.warning(
-                                "Judge failed for %s:%s persona=%s temp=%.1f",
-                                exam_stem,
-                                qid,
-                                persona_id,
-                                temp,
-                                exc_info=True,
-                            )
-                            score = 0.0
-
-                        candidates.append((rewrite, score))
-
+                    candidates = candidates_by_persona[persona_id]
                     if not candidates:
                         logger.error(
                             "No candidates for %s:%s persona=%s — skipping persona",
-                            exam_stem,
-                            qid,
-                            persona_id,
+                            exam_stem, qid, persona_id,
                         )
                         continue
 
