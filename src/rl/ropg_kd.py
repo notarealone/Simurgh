@@ -4,11 +4,15 @@ Stage 1 of Simurgh's two-stage training:
   1. Load (query, persona, docs) groups scored by the offline LLM judge
      (notebooks/gen_ropg_data.ipynb, mirroring configs/datagen_ropg.yaml),
      each doc carrying a teacher_score in [0, 1].
-  2. Fine-tune the Qwen3-Embedding-0.6B encoder with a LoRA adapter to minimise the listwise
+  2. Fine-tune the Qwen3-Embedding-0.6B encoder to minimise the listwise
      KL divergence between its similarity distribution over the group's docs and the
      teacher's softmax utility distribution.
-  3. Validate every epoch with Recall@K / MRR per persona over the full corpus, and checkpoint
-     on the best overall Recall@K.
+  3. Validate every epoch with Recall@K / MRR per persona and checkpoint
+     on the best metric.
+
+Supports two training modes:
+  - hard_neg: Multiple Negatives Ranking Loss (MNRL)
+  - reader_kd: KL-distillation against continuous reader scores
 
 Runs on GPU (Kaggle / university cluster). Install the training extras first:
     uv sync --extra embedding --extra training
@@ -20,603 +24,970 @@ Typical usage:
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 import logging
 import math
 import os
 import random
-import shutil
-import sys
+from collections import defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any
 
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import yaml
+from torch.utils.data import DataLoader, Dataset
+from tqdm.auto import tqdm
+from transformers import AutoModel, AutoTokenizer, get_linear_schedule_with_warmup
 
 from personalization.profiles import render_profile
-
-if TYPE_CHECKING:
-    import torch
 
 logger = logging.getLogger(__name__)
 
 
-# ── Data loading ──────────────────────────────────────────────────────────────
+# =============================================================================
+# Datasets — now with persona conditioning
+# =============================================================================
 
 
-def load_groups(path: str | Path) -> list[dict]:
-    """Load (query, persona, docs) groups from a ROPG-KD JSONL file.
-
-    Each line is ``{"query": ..., "persona_id": ..., "docs": [{"chunk_id", "text",
-    "teacher_score"}, ...]}``. Groups with fewer than 2 docs are dropped (KL over a
-    singleton distribution is degenerate).
-
-    Returns:
-        List of group dicts, unchanged from the file except for the drop filter.
+class TripletDataset(Dataset):
+    """Reads {query, positive, negatives: [...]} lines.
+    If 'persona_id' is present, prepend the rendered profile to the query.
     """
-    groups: list[dict] = []
-    n_dropped = 0
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        rec = json.loads(line)
-        if len(rec.get("docs", [])) < 2:
-            n_dropped += 1
-            continue
-        groups.append(rec)
-    logger.info(
-        "Loaded %d groups from %s (dropped %d with < 2 docs)", len(groups), path, n_dropped
-    )
-    return groups
 
-
-def load_corpus(path: str | Path) -> list[dict]:
-    """Load the full chunk corpus (fields: chunk_id, text) used for validation retrieval."""
-    corpus = []
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        rec = json.loads(line)
-        corpus.append({"chunk_id": rec["chunk_id"], "text": rec["text"]})
-    logger.info("Loaded %d corpus chunks from %s", len(corpus), path)
-    return corpus
-
-
-# ── Encoding ──────────────────────────────────────────────────────────────────
-
-
-def encode_texts(
-    st_model, texts: list[str], device: str, instruction: str | None = None
-) -> torch.Tensor:
-    """Encode *texts* through the same preprocess -> forward path as ``SentenceTransformer.encode``,
-    but with gradients enabled so it can be used inside a training loop.
-
-    *instruction*, if given, is rendered as the Qwen3-Embedding instruct prefix
-    (``Instruct: {instruction}\\nQuery: ``) and passed as the ``prompt`` kwarg so the
-    input module can correctly mask the prompt tokens out of pooling (``prompt_length``).
-    """
-    import torch.nn.functional as F
-    from sentence_transformers.util import batch_to_device
-
-    prompt = f"Instruct: {instruction}\nQuery: " if instruction else None
-    features = st_model.preprocess(texts, prompt=prompt)
-    features = batch_to_device(features, device)
-    out = st_model.forward(features)
-    # Cast to fp32 so cosine similarities and the KL loss are computed at full
-    # precision even when the forward ran under fp16 autocast (fp16 resolution
-    # near 1.0 is too coarse for stable ranking).
-    return F.normalize(out["sentence_embedding"], p=2, dim=-1).float()
-
-
-def encode_docs_chunked(st_model, texts: list[str], device: str, micro_batch: int) -> torch.Tensor:
-    """Encode *texts* in micro-batches of *micro_batch* and concatenate.
-
-    Peak activation memory scales with the per-forward batch, so chunking the ~20-doc
-    encode keeps one KD step within a 16 GB T4. The concatenated embeddings still sit
-    in a single autograd graph, so the listwise loss is unchanged.
-    """
-    import torch
-
-    vecs = [
-        encode_texts(st_model, texts[i : i + micro_batch], device)
-        for i in range(0, len(texts), micro_batch)
-    ]
-    return torch.cat(vecs, dim=0)
-
-
-# ── Loss & validation ─────────────────────────────────────────────────────────
-
-
-def _kd_loss(q_vec: torch.Tensor, d_vecs: torch.Tensor, scores: torch.Tensor, temperature: float):
-    """Listwise KD loss: KL(teacher softmax || student softmax) over one group's docs."""
-    import torch.nn.functional as F
-
-    sims = (q_vec @ d_vecs.T).squeeze(0)
-    targets = F.softmax(scores / temperature, dim=0)
-    log_probs = F.log_softmax(sims / temperature, dim=0)
-    return F.kl_div(log_probs, targets, reduction="sum")
-
-
-def evaluate(
-    st_model,
-    val_groups: list[dict],
-    corpus: list[dict],
-    device: str,
-    kd_temperature: float,
-    top_k: int,
-    relevance_top_m: int,
-    corpus_batch: int = 32,
-    amp_dtype: torch.dtype | None = None,
-) -> dict:
-    """Run validation: mean KD loss over val groups, plus Recall@K / MRR per persona and overall.
-
-    Ranks the full corpus by cosine similarity to each val group's persona-conditioned query
-    embedding; the relevant set for a group is its top-*relevance_top_m* docs by teacher_score
-    (matched against the corpus by chunk_id).
-    """
-    import torch
-
-    st_model.eval()
-    _amp_dtype = amp_dtype if amp_dtype is not None else torch.float16
-    with torch.no_grad(), torch.autocast("cuda", enabled=device == "cuda", dtype=_amp_dtype):
-        # Re-embed the full corpus with the current model. Group docs *are* corpus
-        # chunks, so their embeddings are looked up from this matrix by chunk_id
-        # instead of being re-encoded per group (re-encoding ~20 docs x 48 groups
-        # made validation ~15x slower than it needs to be).
-        from tqdm import tqdm
-
-        corpus_texts = [c["text"] for c in corpus]
-        corpus_ids = [c["chunk_id"] for c in corpus]
-        corpus_vecs = []
-        for i in tqdm(
-            range(0, len(corpus_texts), corpus_batch), desc="  eval: corpus", leave=False
-        ):
-            corpus_vecs.append(encode_texts(st_model, corpus_texts[i : i + corpus_batch], device))
-        corpus_matrix = torch.cat(corpus_vecs, dim=0)  # (N, dim)
-        chunk_id_to_row = {cid: i for i, cid in enumerate(corpus_ids)}
-
-        # Batch-encode val queries per persona: same instruction means the same
-        # prompt, so they can share a forward. Single-query forwards otherwise
-        # dominate eval time.
-        by_persona: dict[str, list[int]] = {}
-        for gi, group in enumerate(val_groups):
-            by_persona.setdefault(group["persona_id"], []).append(gi)
-        query_vecs: dict[int, torch.Tensor] = {}
-        for persona_id, idxs in by_persona.items():
-            instruction = render_profile(persona_id)
-            for j in range(0, len(idxs), corpus_batch):
-                chunk = idxs[j : j + corpus_batch]
-                vecs = encode_texts(
-                    st_model,
-                    [val_groups[gi]["query"] for gi in chunk],
-                    device,
-                    instruction=instruction,
+    def __init__(self, jsonl_path: str, max_negatives: int = 4) -> None:
+        self.items: list[dict[str, Any]] = []
+        with open(jsonl_path, encoding="utf-8") as f:
+            for line in f:
+                obj = json.loads(line.strip())
+                negs = obj.get("negatives", [])[:max_negatives]
+                if not negs:
+                    continue
+                query = obj["query"]
+                if "persona_id" in obj:
+                    persona_text = render_profile(obj["persona_id"])
+                    query = f"{persona_text}\n\n{query}"
+                self.items.append(
+                    {
+                        "query": query,
+                        "positive": obj["positive"],
+                        "negatives": negs,
+                    }
                 )
-                for gi, vec in zip(chunk, vecs, strict=True):
-                    query_vecs[gi] = vec
-
-        # Val KD loss, computed from the corpus embeddings.
-        losses = []
-        for gi, group in enumerate(val_groups):
-            rows: list[int] = []
-            kept_scores: list[float] = []
-            for d in group["docs"]:
-                row = chunk_id_to_row.get(d["chunk_id"])
-                if row is not None:
-                    rows.append(row)
-                    kept_scores.append(d["teacher_score"])
-            if len(rows) < 2:
-                continue
-            scores = torch.tensor(kept_scores, device=device, dtype=torch.float32)
-            q_vec = query_vecs[gi].unsqueeze(0)
-            losses.append(_kd_loss(q_vec, corpus_matrix[rows], scores, kd_temperature).item())
-        val_loss = float(np.mean(losses)) if losses else float("nan")
-
-        per_persona_recall: dict[str, list[float]] = {}
-        per_persona_mrr: dict[str, list[float]] = {}
-        all_recall: list[float] = []
-        all_mrr: list[float] = []
-
-        for gi, group in enumerate(val_groups):
-            persona_id = group["persona_id"]
-            relevant_docs = sorted(group["docs"], key=lambda d: d["teacher_score"], reverse=True)[
-                :relevance_top_m
-            ]
-            relevant_rows = {
-                chunk_id_to_row[d["chunk_id"]]
-                for d in relevant_docs
-                if d["chunk_id"] in chunk_id_to_row
-            }
-            if not relevant_rows:
-                continue
-
-            q_vec = query_vecs[gi].unsqueeze(0)
-            sims = (q_vec @ corpus_matrix.T).squeeze(0)  # (N,)
-            ranked = torch.argsort(sims, descending=True).tolist()
-
-            top_k_rows = set(ranked[:top_k])
-            recall = len(relevant_rows & top_k_rows) / len(relevant_rows)
-
-            rr = 0.0
-            for rank, row in enumerate(ranked, start=1):
-                if row in relevant_rows:
-                    rr = 1.0 / rank
-                    break
-
-            per_persona_recall.setdefault(persona_id, []).append(recall)
-            per_persona_mrr.setdefault(persona_id, []).append(rr)
-            all_recall.append(recall)
-            all_mrr.append(rr)
-
-    metrics = {
-        "val_kd_loss": val_loss,
-        "recall_at_k": {"overall": float(np.mean(all_recall)) if all_recall else 0.0},
-        "mrr": {"overall": float(np.mean(all_mrr)) if all_mrr else 0.0},
-    }
-    for persona_id in per_persona_recall:
-        metrics["recall_at_k"][persona_id] = float(np.mean(per_persona_recall[persona_id]))
-        metrics["mrr"][persona_id] = float(np.mean(per_persona_mrr[persona_id]))
-
-    logger.info(
-        "Validation | KD loss: %.4f | Recall@K overall: %.4f | MRR overall: %.4f",
-        val_loss,
-        metrics["recall_at_k"]["overall"],
-        metrics["mrr"]["overall"],
-    )
-    for persona_id in per_persona_recall:
-        logger.info(
-            "  persona=%s | Recall@K: %.4f | MRR: %.4f",
-            persona_id,
-            metrics["recall_at_k"][persona_id],
-            metrics["mrr"][persona_id],
-        )
-    return metrics
-
-
-def _is_better(candidate: dict, current_best: dict | None) -> bool:
-    """Best checkpoint = highest overall Recall@K; ties -> lower val KL; ties -> higher overall MRR."""
-    if current_best is None:
-        return True
-    c_recall = candidate["recall_at_k"]["overall"]
-    b_recall = current_best["recall_at_k"]["overall"]
-    if c_recall != b_recall:
-        return c_recall > b_recall
-    if candidate["val_kd_loss"] != current_best["val_kd_loss"]:
-        return candidate["val_kd_loss"] < current_best["val_kd_loss"]
-    return candidate["mrr"]["overall"] > current_best["mrr"]["overall"]
-
-
-# ── Training ──────────────────────────────────────────────────────────────────
-
-
-class KDGroupDataset:
-    """Wraps a list of ROPG training groups for use with torch DataLoader."""
-
-    def __init__(self, groups: list[dict]) -> None:
-        self.groups = groups
 
     def __len__(self) -> int:
-        return len(self.groups)
+        return len(self.items)
 
-    def __getitem__(self, idx: int) -> dict:
-        return self.groups[idx]
+    def __getitem__(self, idx: int) -> dict[str, Any]:
+        return self.items[idx]
+
+
+class PairDataset(Dataset):
+    """Reads {query, positive, negative} lines (cartesian-expanded).
+    If 'persona_id' is present, prepend the rendered profile to the query.
+    """
+
+    def __init__(self, jsonl_path: str) -> None:
+        self.items: list[dict[str, str]] = []
+        with open(jsonl_path, encoding="utf-8") as f:
+            for line in f:
+                obj = json.loads(line.strip())
+                query = obj["query"]
+                if "persona_id" in obj:
+                    persona_text = render_profile(obj["persona_id"])
+                    query = f"{persona_text}\n\n{query}"
+                self.items.append(
+                    {
+                        "query": query,
+                        "positive": obj["positive"],
+                        "negative": obj["negative"],
+                    }
+                )
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __getitem__(self, idx: int) -> dict[str, str]:
+        return self.items[idx]
+
+
+class ScoredDataset(Dataset):
+    """Reads scored lines for KL-distillation.
+
+    Supports two JSONL formats:
+      1. Old: {"query": "...", "document": "...", "score": 0.5}
+      2. New: {"query": "...", "persona_id": "...", "docs": [{"chunk_id": "...", "text": "...", "teacher_score": 0.3}, ...]}
+
+    If 'persona_id' is present, prepend the rendered profile to the query.
+    """
+
+    def __init__(self, jsonl_path: str, max_documents: int = 20) -> None:
+        grouped: dict[str, list[tuple[str, float]]] = {}
+        order: list[str] = []
+        with open(jsonl_path, encoding="utf-8") as f:
+            for line in f:
+                obj = json.loads(line.strip())
+                q = obj["query"]
+                if "persona_id" in obj:
+                    persona_text = render_profile(obj["persona_id"])
+                    q = f"{persona_text}\n\n{q}"
+                if q not in grouped:
+                    grouped[q] = []
+                    order.append(q)
+
+                if "docs" in obj:
+                    for doc in obj["docs"]:
+                        grouped[q].append((doc["text"], float(doc["teacher_score"])))
+                elif "document" in obj and "score" in obj:
+                    grouped[q].append((obj["document"], float(obj["score"])))
+                else:
+                    continue  # unknown format
+
+        self.items: list[dict[str, Any]] = []
+        for q in order:
+            docs_scores = grouped[q][:max_documents]
+            if len(docs_scores) < 2:
+                continue
+            docs, scores = zip(*docs_scores, strict=False)
+            self.items.append(
+                {
+                    "query": q,  # already modified with persona
+                    "documents": list(docs),
+                    "scores": list(scores),
+                }
+            )
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __getitem__(self, idx: int) -> dict[str, Any]:
+        return self.items[idx]
+
+
+# =============================================================================
+# Model
+# =============================================================================
+
+
+class QwenEmbeddingModel(nn.Module):
+    """Qwen3-Embedding wrapper with mean pooling + L2 normalization."""
+
+    def __init__(self, model_name: str, use_gradient_checkpointing: bool = True):
+        super().__init__()
+        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        self.model = AutoModel.from_pretrained(
+            model_name, trust_remote_code=True, torch_dtype=dtype
+        )
+        if use_gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
+
+    def forward(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor
+    ) -> torch.Tensor:
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        hidden = outputs.last_hidden_state
+        mask = attention_mask.unsqueeze(-1).float()
+        summed = (hidden * mask).sum(dim=1)
+        denom = mask.sum(dim=1).clamp(min=1e-9)
+        emb = summed / denom
+        return F.normalize(emb, p=2, dim=1)
+
+
+# =============================================================================
+# Losses
+# =============================================================================
+
+
+def mnrl_loss(
+    query_emb: torch.Tensor,
+    pos_emb: torch.Tensor,
+    neg_emb: torch.Tensor,
+    temperature: float = 0.05,
+) -> torch.Tensor:
+    q = query_emb / temperature
+    p = pos_emb / temperature
+    n = neg_emb / temperature
+    pos_score = (q * p).sum(dim=-1, keepdim=True)
+    neg_scores = torch.bmm(n, q.unsqueeze(-1)).squeeze(-1)
+    all_scores = torch.cat([pos_score, neg_scores], dim=-1)
+    labels = torch.zeros(q.size(0), dtype=torch.long, device=q.device)
+    return F.cross_entropy(all_scores, labels)
+
+
+def kd_loss(
+    student_scores: torch.Tensor,
+    gold_scores: torch.Tensor,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    student_logprobs = F.log_softmax(student_scores / temperature, dim=-1)
+    gold_probs = F.softmax(gold_scores / temperature, dim=-1)
+    return F.kl_div(student_logprobs, gold_probs, reduction="batchmean")
+
+
+# =============================================================================
+# Collators
+# =============================================================================
+
+
+def collate_triplets(
+    batch: list[dict[str, Any]],
+    tokenizer,
+    max_length: int,
+) -> dict[str, torch.Tensor]:
+    queries = [x["query"] for x in batch]
+    positives = [x["positive"] for x in batch]
+    max_negs = max(len(x["negatives"]) for x in batch)
+
+    negs_flat: list[str] = []
+    for x in batch:
+        negs_flat.extend(x["negatives"])
+        negs_flat.extend([""] * (max_negs - len(x["negatives"])))
+
+    q = tokenizer(
+        queries,
+        max_length=max_length,
+        padding=True,
+        truncation=True,
+        return_tensors="pt",
+    )
+    p = tokenizer(
+        positives,
+        max_length=max_length,
+        padding=True,
+        truncation=True,
+        return_tensors="pt",
+    )
+    n = tokenizer(
+        negs_flat,
+        max_length=max_length,
+        padding=True,
+        truncation=True,
+        return_tensors="pt",
+    )
+
+    B = len(batch)
+    return {
+        "q_ids": q["input_ids"],
+        "q_mask": q["attention_mask"],
+        "p_ids": p["input_ids"],
+        "p_mask": p["attention_mask"],
+        "n_ids": n["input_ids"].view(B, max_negs, -1),
+        "n_mask": n["attention_mask"].view(B, max_negs, -1),
+    }
+
+
+def collate_pairs(
+    batch: list[dict[str, str]],
+    tokenizer,
+    max_length: int,
+) -> dict[str, torch.Tensor]:
+    triplet_batch = [
+        {"query": x["query"], "positive": x["positive"], "negatives": [x["negative"]]}
+        for x in batch
+    ]
+    return collate_triplets(triplet_batch, tokenizer, max_length)
+
+
+def collate_scored(
+    batch: list[dict[str, Any]],
+    tokenizer,
+    max_length: int,
+) -> dict[str, torch.Tensor]:
+    queries = [x["query"] for x in batch]
+    max_docs = max(len(x["documents"]) for x in batch)
+
+    docs_flat: list[str] = []
+    gold_scores: list[list[float]] = []
+    doc_mask: list[list[bool]] = []
+    for x in batch:
+        n = len(x["documents"])
+        docs_flat.extend(x["documents"])
+        docs_flat.extend([""] * (max_docs - n))
+        padded_scores = list(x["scores"]) + [-1e9] * (max_docs - n)
+        gold_scores.append(padded_scores)
+        doc_mask.append([True] * n + [False] * (max_docs - n))
+
+    q = tokenizer(
+        queries,
+        max_length=max_length,
+        padding=True,
+        truncation=True,
+        return_tensors="pt",
+    )
+    d = tokenizer(
+        docs_flat,
+        max_length=max_length,
+        padding=True,
+        truncation=True,
+        return_tensors="pt",
+    )
+
+    B = len(batch)
+    return {
+        "q_ids": q["input_ids"],
+        "q_mask": q["attention_mask"],
+        "d_ids": d["input_ids"].view(B, max_docs, -1),
+        "d_mask": d["attention_mask"].view(B, max_docs, -1),
+        "gold_scores": torch.tensor(gold_scores, dtype=torch.float32),
+        "doc_mask": torch.tensor(doc_mask, dtype=torch.bool),
+    }
+
+
+# =============================================================================
+# Training helpers
+# =============================================================================
+
+
+def _move(
+    batch: dict[str, torch.Tensor], device: torch.device
+) -> dict[str, torch.Tensor]:
+    return {k: v.to(device) for k, v in batch.items()}
+
+
+# =============================================================================
+# Training loops
+# =============================================================================
+
+
+def train_mnrl_epoch(
+    model: QwenEmbeddingModel,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    scheduler,
+    device: torch.device,
+    temperature: float,
+    use_amp: bool,
+) -> float:
+    model.train()
+    total, n = 0.0, 0
+    pbar = tqdm(loader, desc="train", leave=False)
+    for batch in pbar:
+        batch = _move(batch, device)
+        q_ids, q_mask = batch["q_ids"], batch["q_mask"]
+        p_ids, p_mask = batch["p_ids"], batch["p_mask"]
+        n_ids, n_mask = batch["n_ids"], batch["n_mask"]
+        B, N, L = n_ids.shape
+
+        with torch.autocast(device_type="cuda", enabled=use_amp, dtype=torch.bfloat16):
+            q_emb = model(q_ids, q_mask)
+            p_emb = model(p_ids, p_mask)
+            n_flat = model(n_ids.view(B * N, L), n_mask.view(B * N, L)).view(B, N, -1)
+            loss = mnrl_loss(q_emb, p_emb, n_flat, temperature)
+
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+        scheduler.step()
+        optimizer.zero_grad()
+
+        total += loss.item()
+        n += 1
+        pbar.set_postfix(loss=f"{loss.item():.4f}")
+    return total / max(n, 1)
+
+
+def train_kd_epoch(
+    model: QwenEmbeddingModel,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    scheduler,
+    device: torch.device,
+    temperature: float,
+    use_amp: bool,
+) -> float:
+    model.train()
+    total, n = 0.0, 0
+    pbar = tqdm(loader, desc="train", leave=False)
+    for batch in pbar:
+        batch = _move(batch, device)
+        q_ids, q_mask = batch["q_ids"], batch["q_mask"]
+        d_ids, d_mask = batch["d_ids"], batch["d_mask"]
+        gold = batch["gold_scores"]
+        B, D, L = d_ids.shape
+
+        with torch.autocast(device_type="cuda", enabled=use_amp, dtype=torch.bfloat16):
+            q_emb = model(q_ids, q_mask)
+            d_emb = model(d_ids.view(B * D, L), d_mask.view(B * D, L)).view(B, D, -1)
+            student_scores = torch.einsum("bh,bdh->bd", q_emb, d_emb)
+            loss = kd_loss(student_scores, gold, temperature)
+
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+        scheduler.step()
+        optimizer.zero_grad()
+
+        total += loss.item()
+        n += 1
+        pbar.set_postfix(loss=f"{loss.item():.4f}")
+    return total / max(n, 1)
+
+
+# =============================================================================
+# Eval loops
+# =============================================================================
+
+
+@torch.no_grad()
+def eval_mnrl_epoch(
+    model: QwenEmbeddingModel,
+    loader: DataLoader,
+    device: torch.device,
+    temperature: float,
+    use_amp: bool,
+) -> float:
+    model.eval()
+    total, n = 0.0, 0
+    for batch in tqdm(loader, desc="eval", leave=False):
+        batch = _move(batch, device)
+        q_ids, q_mask = batch["q_ids"], batch["q_mask"]
+        p_ids, p_mask = batch["p_ids"], batch["p_mask"]
+        n_ids, n_mask = batch["n_ids"], batch["n_mask"]
+        B, N, L = n_ids.shape
+        with torch.autocast(device_type="cuda", enabled=use_amp, dtype=torch.bfloat16):
+            q_emb = model(q_ids, q_mask)
+            p_emb = model(p_ids, p_mask)
+            n_flat = model(n_ids.view(B * N, L), n_mask.view(B * N, L)).view(B, N, -1)
+            loss = mnrl_loss(q_emb, p_emb, n_flat, temperature)
+        total += loss.item()
+        n += 1
+    return total / max(n, 1)
+
+
+@torch.no_grad()
+def eval_kd_epoch(
+    model: QwenEmbeddingModel,
+    loader: DataLoader,
+    device: torch.device,
+    temperature: float,
+    use_amp: bool,
+) -> float:
+    model.eval()
+    total, n = 0.0, 0
+    for batch in tqdm(loader, desc="eval", leave=False):
+        batch = _move(batch, device)
+        q_ids, q_mask = batch["q_ids"], batch["q_mask"]
+        d_ids, d_mask = batch["d_ids"], batch["d_mask"]
+        gold = batch["gold_scores"]
+        B, D, L = d_ids.shape
+        with torch.autocast(device_type="cuda", enabled=use_amp, dtype=torch.bfloat16):
+            q_emb = model(q_ids, q_mask)
+            d_emb = model(d_ids.view(B * D, L), d_mask.view(B * D, L)).view(B, D, -1)
+            student_scores = torch.einsum("bh,bdh->bd", q_emb, d_emb)
+            loss = kd_loss(student_scores, gold, temperature)
+        total += loss.item()
+        n += 1
+    return total / max(n, 1)
+
+
+# =============================================================================
+# Evaluation helpers (persona-aware)
+# =============================================================================
+
+
+def load_triplets_for_eval(path: str) -> list[dict[str, str]]:
+    """Load only query and positive from a triplets/pairs JSONL, applying persona if present."""
+    items: list[dict[str, str]] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            obj = json.loads(line.strip())
+            query = obj["query"]
+            if "persona_id" in obj:
+                persona_text = render_profile(obj["persona_id"])
+                query = f"{persona_text}\n\n{query}"
+            items.append(
+                {
+                    "query": query,
+                    "positive": obj["positive"],
+                }
+            )
+    return items
+
+
+def load_scored_for_eval(path: str) -> list[dict[str, Any]]:
+    """Group scored rows by query – each query has multiple (document, score) pairs.
+    Applies persona to the query if present.
+    """
+    grouped: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    order: list[str] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            obj = json.loads(line.strip())
+            q = obj["query"]
+            if "persona_id" in obj:
+                persona_text = render_profile(obj["persona_id"])
+                q = f"{persona_text}\n\n{q}"
+            if q not in grouped:
+                order.append(q)
+            if "docs" in obj:
+                for doc in obj["docs"]:
+                    grouped[q].append((doc["text"], float(doc["teacher_score"])))
+            elif "document" in obj and "score" in obj:
+                grouped[q].append((obj["document"], float(obj["score"])))
+            else:
+                continue
+    return [
+        {
+            "query": q,
+            "documents": [d for d, _ in grouped[q]],
+            "scores": [s for _, s in grouped[q]],
+        }
+        for q in order
+    ]
+
+
+@torch.no_grad()
+def encode_texts(
+    model: QwenEmbeddingModel,
+    tokenizer,
+    texts: list[str],
+    device: str,
+    batch_size: int = 32,
+    max_length: int = 512,
+) -> np.ndarray:
+    """Encode texts using the trained wrapper model (mean-pool + L2)."""
+    all_embs: list[np.ndarray] = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        tokens = tokenizer(
+            batch,
+            max_length=max_length,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+        ).to(device)
+        emb = model(tokens["input_ids"], tokens["attention_mask"])
+        all_embs.append(emb.cpu().float().numpy())
+    return np.vstack(all_embs)
+
+
+# =============================================================================
+# Metrics
+# =============================================================================
+
+
+def recall_at_k(scores: np.ndarray, top_k: int) -> dict[str, float]:
+    """For each row i, the ground-truth index is also i."""
+    Q = scores.shape[0]
+    results: dict[str, float] = {}
+    for k in range(1, top_k + 1):
+        hits = 0
+        for i in range(Q):
+            topk_idx = np.argsort(scores[i])[::-1][:k]
+            if i in topk_idx:
+                hits += 1
+        results[f"recall@{k}"] = hits / max(Q, 1)
+    return results
+
+
+def mrr(scores: np.ndarray) -> float:
+    Q = scores.shape[0]
+    total = 0.0
+    for i in range(Q):
+        ranked = np.argsort(scores[i])[::-1]
+        rank_pos = np.where(ranked == i)[0]
+        if len(rank_pos) > 0:
+            total += 1.0 / (rank_pos[0] + 1)
+    return total / max(Q, 1)
+
+
+def ndcg_at_k(gold_ranks: list[int], k: int) -> float:
+    """NDCG@k for a single query (higher gold rank = more relevant)."""
+    dcg = 0.0
+    for i, g in enumerate(gold_ranks[:k]):
+        dcg += g / math.log2(i + 2)
+    ideal = sorted(gold_ranks, reverse=True)[:k]
+    idcg = sum(g / math.log2(i + 2) for i, g in enumerate(ideal))
+    return dcg / idcg if idcg > 0 else 0.0
+
+
+def evaluate_retrieval(
+    model: QwenEmbeddingModel,
+    tokenizer,
+    test_path: str,
+    fmt: str,
+    device: str,
+    top_k: int,
+    batch_size: int = 32,
+) -> dict[str, float]:
+    """Compute retrieval metrics on the validation set.
+
+    Args:
+        fmt: "triplets", "pairs", or "scored"
+    """
+    if fmt in ("triplets", "pairs"):
+        items = load_triplets_for_eval(test_path)
+        queries = [it["query"] for it in items]
+        positives = [it["positive"] for it in items]
+
+        q_embs = encode_texts(model, tokenizer, queries, device, batch_size)
+        p_embs = encode_texts(model, tokenizer, positives, device, batch_size)
+        scores = q_embs @ p_embs.T  # [Q, P]
+
+        results = recall_at_k(scores, top_k)
+        results["mrr"] = mrr(scores)
+        return results
+
+    else:  # scored
+        items = load_scored_for_eval(test_path)
+        recall_hits = {k: 0 for k in range(1, top_k + 1)}
+        ndcg_sum = 0.0
+        n = 0
+
+        for it in items:
+            q = it["query"]
+            docs = it["documents"]
+            gold = it["scores"]
+            if len(docs) < 2:
+                continue
+
+            q_emb = encode_texts(model, tokenizer, [q], device, batch_size)  # [1, H]
+            d_emb = encode_texts(model, tokenizer, docs, device, batch_size)  # [D, H]
+            sims = (q_emb @ d_emb.T)[0]  # [D]
+
+            max_gold = max(gold)
+            positive_indices = [i for i, s in enumerate(gold) if abs(s - max_gold) < 1e-6]
+
+            ranked = np.argsort(sims)[::-1]
+            for k in range(1, top_k + 1):
+                topk_idx = ranked[:k]
+                if any(p in topk_idx for p in positive_indices):
+                    recall_hits[k] += 1
+
+            gold_arr = np.array(gold, dtype=float)
+            gold_ranks = gold_arr[ranked].tolist()
+            ndcg_sum += ndcg_at_k(gold_ranks, top_k)
+            n += 1
+
+        results: dict[str, float] = {}
+        for k in range(1, top_k + 1):
+            results[f"recall@{k}"] = recall_hits[k] / max(n, 1)
+        results[f"ndcg@{top_k}"] = ndcg_sum / max(n, 1)
+        return results
+
+
+# =============================================================================
+# Training entry point
+# =============================================================================
 
 
 def train(config: dict) -> None:
-    import torch
-    from peft import LoraConfig, TaskType, get_peft_model
-    from sentence_transformers import SentenceTransformer
-    from torch.utils.data import DataLoader
-    from tqdm import tqdm
-    from transformers import get_linear_schedule_with_warmup
-
-    data_cfg = config["data"]
-    emb_cfg = config["embedder"]
-    train_cfg = config["training"]
-    lora_cfg_dict = config["lora"]
-    eval_cfg = config["eval"]
-    checkpoint_dir = Path(config["checkpoint_dir"])
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-
+    """Main training routine driven by a YAML config dict."""
+    # ── seed ────────────────────────────────────────────────────────────────
     seed = config.get("seed", 42)
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-    device = train_cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu")
-    precision = train_cfg.get("precision", "fp32")
-    # use_amp fires for both fp16 and bf16; GradScaler only needed for fp16
-    use_amp = device == "cuda" and precision in ("fp16", "bf16")
-    # bf16 Tensor Cores need Ampere+ (compute capability >= 8); fall back to fp16 on T4/V100
-    if device == "cuda" and torch.cuda.is_available():
-        model_dtype = (
-            torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    # ── device & AMP ────────────────────────────────────────────────────────
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    precision = config["training"].get("precision", "fp32")
+    use_amp = device.type == "cuda" and precision in ("fp16", "bf16")
+
+    logger.info("Device: %s | precision: %s | amp: %s", device, precision, use_amp)
+
+    # ── paths ───────────────────────────────────────────────────────────────
+    train_data = Path(config["data"]["train_data"])
+    mode = config.get("mode", "reader_kd")
+    fmt = config.get("format", "triplets")
+    output_dir = Path(config.get("checkpoint_dir", "./ropg_kd_checkpoints"))
+
+    if mode == "hard_neg":
+        if fmt == "triplets":
+            train_path = train_data / "train_triplets.jsonl"
+            val_path = train_data / "val_triplets.jsonl"
+            eval_fmt = "triplets"
+        else:  # pairs
+            train_path = train_data / "train_pairs.jsonl"
+            val_path = train_data / "val_pairs.jsonl"
+            eval_fmt = "pairs"
+    else:  # reader_kd
+        train_path = train_data / "train.jsonl"
+        val_path = train_data / "val.jsonl"
+        eval_fmt = "scored"
+
+    # ── auto-derive triplets/pairs if missing ───────────────────────────────
+    # The scored data (train.jsonl / val.jsonl) is always generated first.
+    # Triplets and pairs are a coarse binarisation of that signal; they can be
+    # derived on demand so the user doesn't have to re-run data generation just
+    # to switch to hard_neg mode.
+    if mode == "hard_neg" and not train_path.exists():
+        scored_train = train_data / "train.jsonl"
+        if not scored_train.exists():
+            raise FileNotFoundError(
+                f"Neither {train_path} nor {scored_train} found. "
+                "Run data generation first (src/data/gen_ropg_data.py)."
+            )
+        logger.warning(
+            "%s not found — deriving triplets/pairs from scored data in %s",
+            train_path.name,
+            train_data,
         )
+        from data.gen_ropg_data import derive_triplets
+        for scored_path in (train_data / "train.jsonl", train_data / "val.jsonl"):
+            if scored_path.exists():
+                derive_triplets(scored_path, train_data, config["training"].get("max_negatives", 4))
+
+    # ── config-derived hyperparams ──────────────────────────────────────────
+    batch_size = config["training"]["batch_size"]
+    lr = config["training"]["lr"]
+    num_epochs = config["training"]["epochs"]
+    warmup_ratio = config["training"].get("warmup_ratio", 0.1)
+    weight_decay = config["training"].get("weight_decay", 0.01)
+    temperature = config["training"]["temperature"]
+    max_negatives = config["training"].get("max_negatives", 4)
+    max_documents = config["training"].get("max_documents", 20)
+    gradient_checkpointing = config["training"].get("gradient_checkpointing", True)
+    num_workers = config["training"].get("num_workers", 2)
+
+    model_name = config["embedder"]["model"]
+    max_length = config["embedder"].get("max_seq_length", 512)
+
+    best_metric = config["eval"].get("best_metric")
+    eval_batch_size = config["eval"].get("eval_batch_size", 32)
+    eval_top_k = config["eval"].get("top_k", 5)
+
+    # ── tokenizer ───────────────────────────────────────────────────────────
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+
+    # ── datasets & loaders ──────────────────────────────────────────────────
+    if mode == "hard_neg":
+        if fmt == "triplets":
+            train_ds = TripletDataset(str(train_path), max_negatives)
+            val_ds = (
+                TripletDataset(str(val_path), max_negatives)
+                if val_path.exists()
+                else None
+            )
+            collate_fn = lambda b: collate_triplets(b, tokenizer, max_length)  # noqa: E731
+        else:
+            train_ds = PairDataset(str(train_path))
+            val_ds = PairDataset(str(val_path)) if val_path.exists() else None
+            collate_fn = lambda b: collate_pairs(b, tokenizer, max_length)  # noqa: E731
+    else:  # reader_kd
+        train_ds = ScoredDataset(str(train_path), max_documents)
+        val_ds = (
+            ScoredDataset(str(val_path), max_documents)
+            if val_path.exists()
+            else None
+        )
+        collate_fn = lambda b: collate_scored(b, tokenizer, max_length)  # noqa: E731
+
+    logger.info("Train samples: %d", len(train_ds))
+    if val_ds:
+        logger.info("Val samples  : %d", len(val_ds))
     else:
-        model_dtype = torch.float32
-    amp_dtype = torch.bfloat16 if precision == "bf16" else torch.float16
-    logger.info(
-        "Device: %s | precision: %s | model_dtype: %s | amp: %s",
-        device,
-        precision,
-        model_dtype,
-        use_amp,
-    )
+        logger.info("Warning: No validation file found; evaluation will be skipped.")
 
-    # Load data.
-    train_groups = load_groups(data_cfg["train_path"])
-    val_groups = load_groups(data_cfg["val_path"])
-    corpus = load_corpus(data_cfg["corpus_path"])
-
-    model_name = emb_cfg.get("model", "Qwen/Qwen3-Embedding-0.6B")
-    attn_impl = emb_cfg.get("attn_implementation", "sdpa")
-    # Load base model in half precision: cuts weight memory ~50%. LoRA adapter weights
-    # are cast back to fp32 below so the optimizer and gradient math stay stable.
-    st_model = SentenceTransformer(
-        model_name,
-        device=device,
-        trust_remote_code=True,
-        model_kwargs={"attn_implementation": attn_impl, "torch_dtype": model_dtype},
-    )
-    # get_peft_model injects the LoRA layers and freezes the base weights *in place*
-    # on the passed model, so SentenceTransformer's forward path trains through them
-    # without reassignment (Transformer.auto_model is a read-only property; assigning
-    # to it would be silently shadowed by nn.Module.__setattr__). The wrapper is kept
-    # only for print_trainable_parameters() and adapter-only save_pretrained().
-    peft_model = get_peft_model(
-        st_model[0].auto_model,
-        LoraConfig(
-            task_type=TaskType.FEATURE_EXTRACTION,
-            r=lora_cfg_dict.get("r", 8),
-            lora_alpha=lora_cfg_dict.get("alpha", 16),
-            lora_dropout=lora_cfg_dict.get("dropout", 0.1),
-            target_modules=lora_cfg_dict.get("target_modules", ["q_proj", "v_proj"]),
-        ),
-    )
-    peft_model.print_trainable_parameters()
-
-    # Base model is in half precision (frozen). LoRA adapter weights must stay fp32
-    # so the optimizer and gradient accumulation are numerically stable.
-    for param in peft_model.parameters():
-        if param.requires_grad:
-            param.data = param.data.to(torch.float32)
-
-    # One KD step keeps the activation graphs of a query + docs alive until the
-    # backward pass; use_reentrant=False lets gradients flow through frozen base layers
-    # to the LoRA params. Set gradient_checkpointing: true in config if OOM.
-    if train_cfg.get("gradient_checkpointing", False):
-        st_model[0].auto_model.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs={"use_reentrant": False}
-        )
-    # Cap tokenization length: the tokenizer default (32k) lets one long outlier
-    # blow up the whole padded batch; real chunks are far shorter than 8k tokens.
-    st_model[0].max_seq_length = emb_cfg.get("max_seq_length", 8192)
-
-    # Diagnostics: confirm checkpointing actually engaged and how big batches really
-    # are in tokens — the evidence needed to aim any further OOM fix.
-    auto_model = st_model[0].auto_model
-    logger.info(
-        "Gradient checkpointing active: %s | attn implementation: %s",
-        getattr(auto_model, "is_gradient_checkpointing", "unknown"),
-        getattr(auto_model.config, "_attn_implementation", "unknown"),
-    )
-    tokenizer = st_model[0].tokenizer
-    if tokenizer is not None:
-        lengths = sorted(len(tokenizer(c["text"])["input_ids"]) for c in corpus)
-        logger.info(
-            "Corpus token lengths | max: %d | p95: %d | median: %d",
-            lengths[-1],
-            lengths[int(0.95 * (len(lengths) - 1))],
-            lengths[len(lengths) // 2],
-        )
-
-    trainable_params = [p for p in st_model.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(
-        trainable_params,
-        lr=train_cfg.get("lr", 2e-4),
-        weight_decay=train_cfg.get("weight_decay", 0.01),
-    )
-
-    n_epochs = train_cfg.get("epochs", 5)
-    batch_size = train_cfg.get("batch_size", 8)  # groups per optimizer step
-    kd_temp = train_cfg.get("kd_temperature", 1.0)
-    grad_clip = train_cfg.get("grad_clip", 1.0)
-    warmup_ratio = train_cfg.get("warmup_ratio", 0.1)
-
-    n_steps_per_epoch = max(1, math.ceil(len(train_groups) / batch_size))
-    total_steps = n_steps_per_epoch * n_epochs
-    scheduler = get_linear_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=int(total_steps * warmup_ratio),
-        num_training_steps=total_steps,
-    )
-    # GradScaler only for fp16; bf16 has sufficient dynamic range without it
-    scaler = torch.amp.GradScaler("cuda") if (use_amp and precision == "fp16") else None
-
-    top_k = eval_cfg.get("top_k", 5)
-    relevance_top_m = eval_cfg.get("relevance_top_m", 3)
-    doc_micro_batch = train_cfg.get("doc_micro_batch", 8)
-
-    # DataLoader batches batch_size groups per step; workers prefetch while GPU computes.
-    _num_workers = 2 if sys.platform != "darwin" else 0
     train_loader = DataLoader(
-        KDGroupDataset(train_groups),
+        train_ds,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=_num_workers,
-        collate_fn=list,
-        prefetch_factor=2 if _num_workers > 0 else None,
-        persistent_workers=_num_workers > 0,
+        num_workers=num_workers,
+        collate_fn=collate_fn,
+        drop_last=True,
+    )
+    val_loader = (
+        DataLoader(
+            val_ds,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            collate_fn=collate_fn,
+            drop_last=False,
+        )
+        if val_ds
+        else None
     )
 
-    if device == "cuda":
-        torch.cuda.reset_peak_memory_stats()
+    # ── model / optim / scheduler ───────────────────────────────────────────
+    model = QwenEmbeddingModel(model_name, use_gradient_checkpointing=gradient_checkpointing).to(
+        device
+    )
+    total_params = sum(p.numel() for p in model.parameters())
+    logger.info("Parameters   : %d", total_params)
 
-    # Epoch-0 baseline: validate the frozen (untrained) encoder before any training step.
-    logger.info("Running epoch-0 baseline validation (frozen encoder)...")
-    baseline_metrics = evaluate(
-        st_model,
-        val_groups,
-        corpus,
-        device,
-        kd_temp,
-        top_k,
-        relevance_top_m,
-        doc_micro_batch,
-        amp_dtype=amp_dtype,
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=lr, weight_decay=weight_decay
+    )
+    steps_per_epoch = len(train_loader)
+    total_steps = max(1, steps_per_epoch * num_epochs)
+    warmup_steps = int(total_steps * warmup_ratio)
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer, warmup_steps, total_steps
     )
 
-    epoch_metrics: list[dict] = []
-    best_metrics: dict | None = None
+    logger.info("Steps/epoch  : %d", steps_per_epoch)
+    logger.info("Total steps  : %d", total_steps)
+    logger.info("Warmup steps : %d", warmup_steps)
+
+    # ── best-metric tracking ────────────────────────────────────────────────
+    if best_metric is None:
+        best_metric_name = "val_loss"
+        best_metric_goal = "min"
+    else:
+        best_metric_name = best_metric
+        best_metric_goal = "max"
+
+    logger.info(
+        "Best model selection based on: %s (goal: %s)", best_metric_name, best_metric_goal
+    )
+
+    # ── pick train/eval functions ───────────────────────────────────────────
+    if mode == "hard_neg":
+        train_fn = train_mnrl_epoch
+        eval_loss_fn = eval_mnrl_epoch
+    else:
+        train_fn = train_kd_epoch
+        eval_loss_fn = eval_kd_epoch
+
+    # ── checkpoint dirs ─────────────────────────────────────────────────────
+    output_dir.mkdir(parents=True, exist_ok=True)
+    save_dir = output_dir / "checkpoint-best"
+
+    best_val_loss = float("inf")
+    best_metric_value = -float("inf") if best_metric_goal == "max" else float("inf")
     best_epoch = 0
+    epoch_metrics: list[dict[str, Any]] = []
 
-    for epoch in range(1, n_epochs + 1):
-        st_model.train()
-        epoch_loss = 0.0
-        n_groups_seen = 0
-
-        for mini_batch in tqdm(train_loader, desc=f"Epoch {epoch}/{n_epochs}"):
-            # Collect all doc texts and scores up front so they can be encoded in one
-            # chunked call instead of one call per group (reduces Python overhead and
-            # gives encode_docs_chunked larger, GPU-friendly batches).
-            by_persona: dict[str, list[tuple[int, str]]] = {}
-            all_doc_texts: list[str] = []
-            doc_offsets: list[tuple[int, int]] = []
-            all_scores_list: list[torch.Tensor] = []
-
-            for gi, group in enumerate(mini_batch):
-                by_persona.setdefault(group["persona_id"], []).append((gi, group["query"]))
-                docs = sorted(group["docs"], key=lambda d: d["teacher_score"], reverse=True)[:8]
-                doc_offsets.append((len(all_doc_texts), len(docs)))
-                all_doc_texts.extend(d["text"] for d in docs)
-                all_scores_list.append(
-                    torch.tensor(
-                        [d["teacher_score"] for d in docs], device=device, dtype=torch.float32
-                    )
-                )
-
-            ctx = (
-                torch.amp.autocast("cuda", dtype=amp_dtype)
-                if use_amp
-                else contextlib.nullcontext()
-            )
-            with ctx:
-                # Encode queries in sub-batches grouped by persona so all queries in
-                # a sub-batch share the same instruction prefix and prompt_length.
-                q_vecs: list[torch.Tensor | None] = [None] * len(mini_batch)
-                for persona_id, idx_queries in by_persona.items():
-                    idxs, queries = zip(*idx_queries, strict=True)
-                    vecs = encode_texts(
-                        st_model,
-                        list(queries),
-                        device,
-                        instruction=render_profile(persona_id),
-                    )
-                    for gi, vec in zip(idxs, vecs, strict=True):
-                        q_vecs[gi] = vec
-
-                # Encode all docs from the batch in one chunked call.
-                all_d_vecs = encode_docs_chunked(st_model, all_doc_texts, device, doc_micro_batch)
-
-                # Sum per-group KD losses; single backward per optimizer step replaces
-                # the old gradient-accumulation pattern (was 1 backward per group).
-                step_loss = sum(
-                    _kd_loss(
-                        q_vecs[gi].unsqueeze(0),
-                        all_d_vecs[offset : offset + n],
-                        all_scores_list[gi],
-                        kd_temp,
-                    )
-                    for gi, (offset, n) in enumerate(doc_offsets)
-                ) / len(mini_batch)
-
-            if use_amp:
-                scaler.scale(step_loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(trainable_params, grad_clip)
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                step_loss.backward()
-                torch.nn.utils.clip_grad_norm_(trainable_params, grad_clip)
-                optimizer.step()
-            scheduler.step()
-            optimizer.zero_grad(set_to_none=True)
-
-            epoch_loss += step_loss.item() * len(mini_batch)
-            n_groups_seen += len(mini_batch)
-
-        avg_train_loss = epoch_loss / max(n_groups_seen, 1)
-        logger.info("Epoch %d/%d | avg train KL loss: %.4f", epoch, n_epochs, avg_train_loss)
-
-        if device == "cuda":
-            logger.info(
-                "CUDA peak memory | allocated: %.2f GB | reserved: %.2f GB",
-                torch.cuda.max_memory_allocated() / 1e9,
-                torch.cuda.max_memory_reserved() / 1e9,
-            )
-            torch.cuda.empty_cache()
-        val_metrics = evaluate(
-            st_model,
-            val_groups,
-            corpus,
+    # ── training loop ───────────────────────────────────────────────────────
+    for epoch in tqdm(range(1, num_epochs + 1), desc="epochs"):
+        train_loss = train_fn(
+            model,
+            train_loader,
+            optimizer,
+            scheduler,
             device,
-            kd_temp,
-            top_k,
-            relevance_top_m,
-            doc_micro_batch,
-            amp_dtype=amp_dtype,
+            temperature,
+            use_amp,
         )
-        val_metrics["epoch"] = epoch
-        val_metrics["train_kd_loss"] = avg_train_loss
-        epoch_metrics.append(val_metrics)
 
-        epoch_dir = checkpoint_dir / f"epoch{epoch}"
-        peft_model.save_pretrained(str(epoch_dir))
-        (epoch_dir / "metrics.json").write_text(
-            json.dumps(val_metrics, ensure_ascii=False, indent=2), encoding="utf-8"
+        val_str = ""
+        epoch_entry: dict[str, Any] = {
+            "epoch": epoch,
+            "train_loss": train_loss,
+        }
+
+        if val_loader and val_path.exists():
+            # Validation loss
+            val_loss = eval_loss_fn(
+                model,
+                val_loader,
+                device,
+                temperature,
+                use_amp,
+            )
+            val_str = f" | Val Loss: {val_loss:.4f}"
+            epoch_entry["val_loss"] = val_loss
+
+            # Retrieval metrics on validation set
+            eval_metrics = evaluate_retrieval(
+                model,
+                tokenizer,
+                str(val_path),
+                eval_fmt,
+                str(device),
+                eval_top_k,
+                eval_batch_size,
+            )
+            metric_str = " | ".join(f"{k}: {v:.4f}" for k, v in eval_metrics.items())
+            val_str += f" | {metric_str}"
+            epoch_entry.update(eval_metrics)
+
+            # Best checkpoint selection
+            if best_metric is None:
+                # Use validation loss
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    model.model.save_pretrained(save_dir)
+                    tokenizer.save_pretrained(save_dir)
+                    best_epoch = epoch
+                    val_str += " *best (loss)*"
+            else:
+                current_metric = eval_metrics.get(best_metric_name)
+                if current_metric is not None:
+                    improved = (
+                        current_metric > best_metric_value
+                        if best_metric_goal == "max"
+                        else current_metric < best_metric_value
+                    )
+                    if improved:
+                        best_metric_value = current_metric
+                        model.model.save_pretrained(save_dir)
+                        tokenizer.save_pretrained(save_dir)
+                        best_epoch = epoch
+                        val_str += (
+                            f" *best ({best_metric_name}: {current_metric:.4f})*"
+                        )
+                else:
+                    # Fallback to loss if metric not found
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                        model.model.save_pretrained(save_dir)
+                        tokenizer.save_pretrained(save_dir)
+                        best_epoch = epoch
+                        val_str += " *best (loss fallback)*"
+
+        epoch_metrics.append(epoch_entry)
+        logger.info(
+            "Epoch %d/%d - Train Loss: %.4f%s",
+            epoch,
+            num_epochs,
+            train_loss,
+            val_str,
         )
-        logger.info("Checkpoint saved: %s", epoch_dir)
 
-        if _is_better(val_metrics, best_metrics):
-            best_metrics = val_metrics
-            best_epoch = epoch
+        # Periodic checkpoint
+        freq = max(1, num_epochs // 3)
+        if epoch % freq == 0:
+            ckpt_dir = output_dir / f"checkpoint-epoch-{epoch}"
+            model.model.save_pretrained(ckpt_dir)
+            tokenizer.save_pretrained(ckpt_dir)
+            logger.info("Periodic checkpoint saved: %s", ckpt_dir)
 
-    best_dir = checkpoint_dir / "best"
-    if best_epoch > 0:
-        source_dir = checkpoint_dir / f"epoch{best_epoch}"
-        if best_dir.exists():
-            shutil.rmtree(best_dir)
-        shutil.copytree(source_dir, best_dir)
-        logger.info("Best checkpoint (epoch %d) copied to %s", best_epoch, best_dir)
+    # ── final checkpoint ────────────────────────────────────────────────────
+    final_dir = output_dir / "checkpoint-final"
+    model.model.save_pretrained(final_dir)
+    tokenizer.save_pretrained(final_dir)
 
+    # ── training log ────────────────────────────────────────────────────────
     training_log = {
         "config": config,
         "seed": seed,
-        "baseline_metrics": baseline_metrics,
         "epoch_metrics": epoch_metrics,
         "best_epoch": best_epoch,
-        "best_epoch_reason": (
-            "highest overall Recall@K; ties broken by lower val KL loss, then higher overall MRR"
-        ),
     }
-    (checkpoint_dir / "training_log.json").write_text(
+    log_path = output_dir / "training_log.json"
+    log_path.write_text(
         json.dumps(training_log, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    logger.info("Training log written: %s", checkpoint_dir / "training_log.json")
+
+    logger.info("Training complete!")
+    logger.info("  Best model : %s", save_dir)
+    logger.info("  Final model: %s", final_dir)
+    logger.info("  Training log: %s", log_path)
+
+
+# =============================================================================
+# CLI entry point
+# =============================================================================
 
 
 def main() -> None:
-    # Must be set before torch initializes CUDA; mitigates fragmentation OOMs by
-    # letting the allocator grow segments instead of hunting for contiguous blocks.
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(message)s",
+    )
     parser = argparse.ArgumentParser(
         description="ROPG-KD: fine-tune Qwen3-Embedding encoder with KD."
     )
-    parser.add_argument("--config", required=True, help="Path to train_ropg.yaml.")
+    parser.add_argument(
+        "--config", required=True, help="Path to train_ropg.yaml."
+    )
     args = parser.parse_args()
     with open(args.config, encoding="utf-8") as f:
         config = yaml.safe_load(f)

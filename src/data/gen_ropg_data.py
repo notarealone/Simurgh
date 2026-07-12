@@ -265,6 +265,59 @@ def run(config_path: str | Path) -> None:
                     out_fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
                     out_fh.flush()
 
+        # Convert scored data to hard-negative triplets/pairs for hard_neg training mode.
+        derive_triplets(output_path, output_dir, max_negatives=cfg.get("max_negatives", 4))
+
+
+# The scored data is the ground truth: each (query, persona) group has docs ranked
+# by an LLM judge (teacher_score in [0,1]). Triplets are derived by treating the
+# highest-scored doc as the positive and the lowest-scored docs as negatives —
+# a coarse binarisation of the continuous signal that lets the same dataset drive
+# MNRL (hard_neg mode) training without a separate annotation pass.
+def derive_triplets(scored_path: Path, output_dir: Path, max_negatives: int = 4) -> None:
+    """Derive hard-negative triplets and pairs from a scored JSONL file.
+
+    Writes two files alongside the scored file:
+      {stem}_triplets.jsonl — one line per group: {query, persona_id, positive, negatives:[...]}
+      {stem}_pairs.jsonl    — one line per (pos, neg) pair: {query, persona_id, positive, negative}
+    """
+    stem = scored_path.stem          # e.g. "train" or "val"
+    triplet_path = output_dir / f"{stem}_triplets.jsonl"
+    pairs_path   = output_dir / f"{stem}_pairs.jsonl"
+
+    n_triplets = 0
+    n_pairs    = 0
+
+    with (
+        triplet_path.open("w", encoding="utf-8") as tf,
+        pairs_path.open("w", encoding="utf-8")   as pf,
+    ):
+        for raw in scored_path.read_text(encoding="utf-8").splitlines():
+            if not raw.strip():
+                continue
+            rec = json.loads(raw)
+            docs = rec.get("docs", [])
+            if len(docs) < 2:
+                continue
+
+            sorted_docs = sorted(docs, key=lambda d: d["teacher_score"], reverse=True)
+            positive    = sorted_docs[0]["text"]
+            negatives   = [d["text"] for d in sorted_docs[-max_negatives:]]
+
+            base = {"query": rec["query"], "persona_id": rec.get("persona_id", "")}
+
+            tf.write(json.dumps({**base, "positive": positive, "negatives": negatives}, ensure_ascii=False) + "\n")
+            n_triplets += 1
+
+            for neg in negatives:
+                pf.write(json.dumps({**base, "positive": positive, "negative": neg}, ensure_ascii=False) + "\n")
+                n_pairs += 1
+
+    logger.info(
+        "Derived %d triplets and %d pairs from %s → %s, %s",
+        n_triplets, n_pairs, scored_path.name, triplet_path.name, pairs_path.name,
+    )
+
 
 def main() -> None:
     logging.basicConfig(

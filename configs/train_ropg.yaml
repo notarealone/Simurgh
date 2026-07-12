@@ -1,39 +1,35 @@
-# Stage-1 training: ROPG-KD fine-tunes the Qwen3-Embedding-0.6B retriever via knowledge
-# distillation from LLM-judge teacher scores (see notebooks/gen_ropg_data.ipynb +
-# configs/datagen_ropg.yaml for how data/ropg_kd/{train,val}.jsonl is produced).
+# Stage-1 training: ROPG-KD fine-tunes the Qwen3-Embedding-0.6B retriever.
+# Data is produced by notebooks/gen_ropg_data.ipynb / src/data/gen_ropg_data.py:
+#   reader_kd mode    →  data/ropg_kd/{train,val}.jsonl          (listwise scored)
+#   hard_neg triplets →  data/ropg_kd/{train,val}_triplets.jsonl
+#   hard_neg pairs    →  data/ropg_kd/{train,val}_pairs.jsonl
 seed: 42
+mode: reader_kd           # hard_neg | reader_kd
+format: triplets          # triplets | pairs — only used when mode=hard_neg
 
 data:
-  train_path: data/ropg_kd/train.jsonl
-  val_path: data/ropg_kd/val.jsonl
-  corpus_path: data/chunks/corpus.jsonl
+  train_data: data/ropg_kd   # directory; file names are derived from mode + format above
 
 embedder:
   model: Qwen/Qwen3-Embedding-0.6B
   max_seq_length: 512    # most chunks are <260 tokens; 8192 wastes O(n²) attention
-  attn_implementation: sdpa   # fused attention; works on T4 without flash-attn
 
 training:
-  device: cuda        # cpu for local smoke runs
-  precision: fp16      # fp16 | bf16 | fp32 — fp16 for T4/P100, bf16 for A100+
-  gradient_checkpointing: true  # recompute activations in backward; needed on 16 GB T4
+  device: cuda           # cpu for local smoke runs
+  precision: fp16        # fp16 | bf16 | fp32 — fp16 for T4/P100, bf16 for A100+
+  gradient_checkpointing: true
   epochs: 5
-  batch_size: 8        # groups per optimizer step (gradient accumulation)
-  doc_micro_batch: 8   # docs per forward within a group; caps peak activation memory
-  lr: 2.0e-4
+  batch_size: 16
+  lr: 2.0e-5
   weight_decay: 0.01
   warmup_ratio: 0.1
-  grad_clip: 1.0
-  kd_temperature: 1.0
-
-lora:
-  r: 8
-  alpha: 16
-  dropout: 0.1
-  target_modules: [q_proj, v_proj]
+  temperature: 1.0       # MNRL contrastive temp (hard_neg) or KD softmax temp (reader_kd)
+  max_negatives: 4       # max hard negatives per query (hard_neg mode only)
+  max_documents: 20      # max docs per query (reader_kd mode only)
 
 eval:
-  top_k: 5             # matches inference retrieval.top_k
-  relevance_top_m: 3   # relevant = top-m docs by teacher_score per group
+  top_k: 5
+  eval_batch_size: 32
+  best_metric: recall@1  # mrr | recall@K | ndcg@K — null falls back to val loss
 
 checkpoint_dir: data/rl/ropg_kd_checkpoints
