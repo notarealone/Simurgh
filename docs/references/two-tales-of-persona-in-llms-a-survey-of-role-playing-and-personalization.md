@@ -29,9 +29,9 @@ rewrite/answer is better *for that student*), while the **rewriter + generator**
 semantics: the persona that *labels* preference pairs (role-play) must be kept distinct from the rubric
 that *scores* evaluation — the same spirit as the judge-independence rule in [experiment-design](../experiment-design.md) and
 [things-to-consider](../things-to-consider.md). The survey also frames why Simurgh's personalization signal (a *declared profile*)
-differs from history-based personalization ([optimization-methods-for-personalizing-large-language-models-through-retrieval-augmentation](optimization-methods-for-personalizing-large-language-models-through-retrieval-augmentation.md), [personalize-before-retrieve-llm-based-personalized-query-expansion-for-user-centric-retrieval](personalize-before-retrieve-llm-based-personalized-query-expansion-for-user-centric-retrieval.md)).
+differs from history-based personalization ([optimization-methods-for-personalizing-large-language-models-through-retrieval-augmentation](optimization-methods-for-personalizing-large-language-models-through-retrieval-augmentation.md), and Zhang et al. 2025's Personalize-Before-Retrieve).
 
 ## Notes
 
 - Reinforces that "persona" is overloaded; the persona doc should state up front which sense is meant where (character for the simulator, user-profile for the system).
-- The personalization-line taxonomy complements the broader [personalization-of-large-language-models-a-survey](personalization-of-large-language-models-a-survey.md); this one is sharper on the role-play vs personalize boundary.
+- The personalization-line taxonomy complements broader LLM-personalization surveys; this one is sharper on the role-play vs personalize boundary.

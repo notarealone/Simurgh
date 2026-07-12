@@ -39,5 +39,5 @@ and carries **no history**. So TASA informs the *persona representation*, not th
 ## Notes
 
 - Memory and forgetting dynamics are deliberately **out of Simurgh's scope** (4-week timeline, single-turn QA); state this explicitly so the omission reads as a scoping choice, not an oversight.
-- The transferable ideas are (1) prose persona representation and (2) **LLM-as-persona-extractor** — though Simurgh inverts the direction: it *authors* synthetic personas rather than mining them from logs (cf. [scaling-synthetic-data-creation-with-1-000-000-000-personas](scaling-synthetic-data-creation-with-1-000-000-000-personas.md)).
+- The transferable ideas are (1) prose persona representation and (2) **LLM-as-persona-extractor** — though Simurgh inverts the direction: it *authors* synthetic personas rather than mining them from logs (cf. the *Scaling Synthetic Data Creation with 1,000,000,000 Personas* line of persona-driven synthetic-data generation).
 - TASA personalizes the *generator*; Simurgh's trained component is the *rewriter*. The persona schema is shared, but the injection point differs — relevant to the persona-aware-vs-blind generator axis in [methodology](../methodology.md).
