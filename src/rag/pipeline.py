@@ -117,6 +117,9 @@ class DenseRAG(NaiveRAG):
             batch_size=emb_cfg.get("batch_size", 32),
             fp16=emb_cfg.get("fp16", False),
             adapter_path=emb_cfg.get("adapter_path"),
+            # Must equal embedder.max_seq_length in configs/train_ropg.yaml: a ROPG-KD
+            # adapter trained at one truncation length indexes badly at another.
+            max_seq_length=emb_cfg.get("max_seq_length", 2048),
         )
         store = DenseStore(
             index_path=config["knowledge_base"]["index_path"],
@@ -167,6 +170,9 @@ class PersonaRAG(DenseRAG):
             batch_size=emb_cfg.get("batch_size", 32),
             fp16=emb_cfg.get("fp16", False),
             adapter_path=emb_cfg.get("adapter_path"),
+            # Must equal embedder.max_seq_length in configs/train_ropg.yaml: a ROPG-KD
+            # adapter trained at one truncation length indexes badly at another.
+            max_seq_length=emb_cfg.get("max_seq_length", 2048),
         )
         store = DenseStore(
             index_path=config["knowledge_base"]["index_path"],

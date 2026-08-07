@@ -104,20 +104,52 @@ DPO-only compute constraint.
   embedded with the rendered persona profile as the Qwen3-Embedding instruction prefix
   (`Instruct: <profile>\nQuery: …`), the group's candidate documents are embedded with
   no instruction, and the KD loss above is applied to their cosine similarities. Only
-  the LoRA adapter (`q_proj`/`v_proj`) receives gradients; the 0.6B base stays frozen.
+  the LoRA adapter (`q_proj`/`k_proj`/`v_proj`/`o_proj`) receives gradients; the 0.6B base
+  stays frozen.
   Because the persona conditions the *query side only*, documents are embedded
   persona-free — one shared FAISS index serves all personas at inference.
+- **Encoder parity (train == serve):** the training encoder must be numerically identical
+  to the serving one (`src/rag/embedder.py`) — Qwen3-Embedding's native **last-token**
+  pooling, documents encoded bare, queries wrapped in the instruct prefix above. An
+  earlier revision mean-pooled and used a raw `<profile>\n\n<query>` prefix; a LoRA
+  adapter trained under one pooling head and read out through another loses most of what
+  it learned, silently and with a healthy-looking loss curve. `benchmarks/check_encoder_parity.py`
+  is the gate and asserts cosine ≥ 0.999 on both documents and queries; run it before
+  trusting any ROPG-KD number.
+- **KD temperatures:** student 0.05, teacher 0.2 — not 1.0. Student scores are cosine
+  similarities in [-1, 1] and teacher scores lie in [0, 1], so at temperature 1.0 a softmax
+  over the 20 candidates is near-uniform on *both* sides and the KD gradient is close to
+  noise. Both values still need the ablation in [experiment-design](experiment-design.md)
+  to confirm; they are a reasoned default, not a measured optimum.
 - **Guard:** report Recall@K/MRR per persona on the val set throughout training to
   catch reward hacking (an encoder that scores well on the judge rubric but retrieves
   nothing useful).
-- **Validation relevance definition:** for Recall@K/MRR, the relevant set for a
-  `(query, persona)` group is its **top-3 docs by teacher score within the judged top-20
-  candidates** — calibration-free (only the ranking among judged docs matters) and every
-  group contributes equally regardless of how the judge's absolute scores are distributed.
-  *Alternatives considered:* a score threshold (e.g. ≥ 0.7) with a top-1 fallback for
-  groups with no doc above it — semantically closer to "relevant" but sensitive to judge
-  calibration drift across groups; and strict top-1 — simpler, but brittle under near-ties
-  between the best few candidates.
+- **Validation relevance definition:** two notions are reported side by side.
+  - **nDCG@1–K (primary)** grades each judged doc by its raw teacher score (linear gain;
+    scores already lie in [0,1], so exponential gain would only compress them). No cutoff
+    is drawn, and the ceiling is 1.0 at every K. This is the honest reading of a graded
+    judge: measured on `val.jsonl`, mean teacher score by rank runs
+    0.757 / 0.569 / 0.447 / 0.372 / 0.323, so a binary top-3 set counts the 1st and 3rd
+    doc identically despite a ~1.7× difference in judged utility — and the rank-3 vs
+    rank-4 gap is **under 0.05 in 53% of groups**, meaning the boundary mostly separates
+    near-ties.
+  - **Recall@K / Hit@K / MRR** keep the binary set: the group's **top-3 docs by teacher
+    score within the judged top-20 candidates**. Retained deliberately — nDCG ranges over
+    the same graded distribution the KD loss is trained on, so a coarser, differently
+    shaped metric belongs beside it as the reward-hacking guard. Note Recall@k divides by
+    that set's size, so Recall@1 could never exceed 1/3; it is reported at K only.
+  - *Alternatives considered:* a score threshold (e.g. ≥ 0.7) — semantically closer to
+    "relevant", but measured on `val.jsonl` it leaves **79/276 groups with no relevant doc
+    at all** (125/276 at 0.8), and such groups are skipped entirely, so any usable
+    threshold silently discards 17–45% of the val set; and strict top-1 — simpler, but
+    brittle under exactly the near-ties quantified above.
+- **Significance:** per-query metric vectors are persisted to `training_log.json` each
+  epoch so any two epochs can be compared with a **paired** bootstrap. This matters: with
+  ~276 val queries a single epoch's marginal 95% CI is ≈ ±0.04, wide enough that two means
+  differing by a real 0.05 still overlap. Because every epoch scores the same queries
+  (per-query outcomes correlate ≈ 0.77), resampling the *difference* cancels shared query
+  difficulty and is ~35% tighter. Epoch 0 — the untrained encoder, since a fresh LoRA
+  adapter is exactly the identity — is the baseline every epoch is tested against.
 - **Circular-dependency caveat:** Recall@K here measures whether the trained retriever
   agrees with the *same* LLM teacher that produced the training scores — not whether the
   retrieved documents actually contain the answer to the question. This is intentional for
@@ -188,8 +220,9 @@ options in [things-to-consider](things-to-consider.md)).
 - [ ] Select checkpoints on **validation** persona-fit (not train loss); watch for length/repetition hacking and policy degeneration
 - [ ] Log seed, config, and model + index versions per run (reproducible by construction)
 
-Hardware: a small model + LoRA fits Kaggle / limited university GPUs; the generator and
-judges are API calls.
+Hardware: ROPG-KD trains on one GPU and scales to several via DDP, launched with
+`torchrun` (2x T4 on Kaggle). A small model + LoRA fits Kaggle / limited university
+GPUs; the generator and judges are API calls.
 
 ## Inference
 

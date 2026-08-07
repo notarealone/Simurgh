@@ -1,35 +1,84 @@
-# Stage-1 training: ROPG-KD fine-tunes the Qwen3-Embedding-0.6B retriever.
-# Data is produced by notebooks/gen_ropg_data.ipynb / src/data/gen_ropg_data.py:
-#   reader_kd mode    →  data/ropg_kd/{train,val}.jsonl          (listwise scored)
-#   hard_neg triplets →  data/ropg_kd/{train,val}_triplets.jsonl
-#   hard_neg pairs    →  data/ropg_kd/{train,val}_pairs.jsonl
+# Stage-1 training: ROPG-KD fine-tunes the Qwen3-Embedding-0.6B retriever via a LoRA
+# adapter, distilling LLM-judge teacher scores. Data comes from
+# notebooks/gen_ropg_data.ipynb / src/data/gen_ropg_data.py:
+#   reader_kd mode    ->  data/ropg_kd/{train,val}.jsonl          (listwise scored)
+#   hard_neg triplets ->  data/ropg_kd/{train,val}_triplets.jsonl
+#   hard_neg pairs    ->  data/ropg_kd/{train,val}_pairs.jsonl
 seed: 42
-mode: reader_kd           # hard_neg | reader_kd
+mode: reader_kd           # hard_neg | reader_kd  (hard_neg is the MNRL ablation arm)
 format: triplets          # triplets | pairs — only used when mode=hard_neg
 
 data:
-  train_data: data/ropg_kd   # directory; file names are derived from mode + format above
+  train_data: data/ropg_kd          # directory; file names derive from mode + format
+  corpus_path: data/chunks/corpus.jsonl  # ranked in full for Recall@K / MRR
 
 embedder:
   model: Qwen/Qwen3-Embedding-0.6B
-  max_seq_length: 512    # most chunks are <260 tokens; 8192 wastes O(n²) attention
+  # Must match the max_seq_length used when the FAISS index is built, or the same
+  # chunk gets two different embeddings at train and serve time. At 2048 the p95
+  # corpus chunk fits whole (~1.5k tokens); only the longest few still truncate.
+  max_seq_length: 2048
 
 training:
   device: cuda           # cpu for local smoke runs
-  precision: fp16        # fp16 | bf16 | fp32 — fp16 for T4/P100, bf16 for A100+
+  precision: fp16        # fp16 | bf16 | fp32 — T4/P100 have no bf16; A100+ do
+  # Recompute activations in backward. Not a tunable on a 16 GB T4: without it a single
+  # batch_size:1 step retains ~36 GB of activations (28 layers x ~43k tokens, ~30 KB per
+  # token per layer in fp16); with it only each block's input is stored, ~2.5 GB. There is
+  # no batch_size/doc_micro_batch pair that fits without it. Cost is one extra forward.
   gradient_checkpointing: true
   epochs: 5
-  batch_size: 16
-  lr: 2.0e-5
+  batch_size: 2          # groups per optimizer step; effective batch = this x world_size.
+                         # The knob for *retained* activation memory: one graph is held
+                         # until backward, so stored activations scale with tokens per step
+                         # and only this controls them. (It no longer drives padding waste -
+                         # encode_chunked re-pads each micro-batch to its own width, so the
+                         # collator's batch-wide padding is discarded before any forward.)
+  doc_micro_batch: 10    # sequences per forward inside encode_chunked. Two distinct roles:
+                         # (1) caps the *transient* per-forward working set - it does not
+                         # reduce retained activations, since all micro-forwards stay in one
+                         # graph; (2) sets padding tightness, because encode_chunked sorts by
+                         # true length and trims each micro-batch to its own width. Role (2)
+                         # dominates here: the median document is 167 tokens but the collator
+                         # pads the batch to 2048, so unsorted chunking wastes ~65% of every
+                         # FLOP. Measured on train.jsonl: 20 -> 1.68x faster, 10 -> 2.21x,
+                         # 5 -> 2.54x. 10 takes nearly all the win while keeping launches
+                         # large enough not to starve the GPU. 0 disables chunking entirely.
+  lr: 2.0e-4             # LoRA rate — a full-FT rate (2e-5) badly under-trains an adapter
   weight_decay: 0.01
   warmup_ratio: 0.1
-  temperature: 1.0       # MNRL contrastive temp (hard_neg) or KD softmax temp (reader_kd)
+  grad_clip: 1.0
+  num_workers: 2
+  # Student scores are cosine sims in [-1,1] and teacher scores lie in [0,1]. At
+  # temperature 1.0 a softmax over 20 candidates is near-uniform on both sides and
+  # the KD gradient is close to noise, so both are sharpened well below 1.
+  student_temp: 0.05     # student/retriever softmax temp (also the MNRL temp in hard_neg)
+  teacher_temp: 0.2      # teacher/gold softmax temp (reader_kd only)
   max_negatives: 4       # max hard negatives per query (hard_neg mode only)
   max_documents: 20      # max docs per query (reader_kd mode only)
 
+lora:
+  r: 8
+  alpha: 16
+  dropout: 0.1
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+
 eval:
-  top_k: 5
-  eval_batch_size: 32
-  best_metric: recall@1  # mrr | recall@K | ndcg@K — null falls back to val loss
+  top_k: 5               # matches inference retrieval.top_k; also the range of the
+                         # nDCG@1..K and Hit@1..K curves reported each epoch
+  relevance_top_m: 3     # binary relevant set = top-m docs by teacher_score per group.
+                         # Drives Recall@K / Hit@K / MRR only - nDCG grades by the raw
+                         # teacher_score and needs no cutoff, which is why it is the
+                         # primary metric: the rank-3 vs rank-4 score gap is under 0.05
+                         # in 53% of val groups, so this boundary mostly splits near-ties.
+                         # Note Recall@k divides by m, so Recall@1 is capped at 1/m -
+                         # hence Recall is reported at K only, where the ceiling is 1.0.
+  eval_batch_size: 32    # corpus + val-query encoding only, and unrelated to batch_size:
+                         # encode_texts is no-grad, so nothing is retained for backward and
+                         # only the transient per-forward set exists. Runs on rank 0 once
+                         # per epoch over a ~171-chunk corpus, so this is a minor cost.
+  # Checkpoint rule is fixed: highest overall Recall@K, ties broken by lower val KD
+  # loss, then higher MRR. Selecting on KD loss alone would reward an encoder that
+  # matches the teacher while retrieving worse.
 
 checkpoint_dir: data/rl/ropg_kd_checkpoints

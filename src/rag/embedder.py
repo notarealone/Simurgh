@@ -26,6 +26,7 @@ class Qwen3Embedder:
         batch_size: int = 32,
         fp16: bool = False,
         adapter_path: str | None = None,
+        max_seq_length: int | None = None,
     ) -> None:
         model_kwargs = {"torch_dtype": torch.float16} if fp16 else {}
         self.model = SentenceTransformer(
@@ -38,6 +39,11 @@ class Qwen3Embedder:
             # merge_and_unload folds the LoRA weights into it, so no reassignment is
             # needed (auto_model is a read-only property on the Transformer module).
             PeftModel.from_pretrained(self.model[0].auto_model, adapter_path).merge_and_unload()
+        if max_seq_length is not None:
+            # Must match embedder.max_seq_length in configs/train_ropg.yaml. If training
+            # truncates at a different length than indexing, the same chunk receives two
+            # different embeddings and the fine-tune is measured against the wrong vectors.
+            self.model.max_seq_length = max_seq_length
         self.batch_size = batch_size
         self.dim: int = self.model.get_embedding_dimension()
 
