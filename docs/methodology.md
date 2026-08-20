@@ -159,6 +159,86 @@ DPO-only compute constraint.
   the judge there scores faithfulness to retrieved context and answer accuracy independently,
   which surfaces cases where the retriever found plausible-but-wrong documents.
 
+
+#### Why `reader_kd` was retired as the primary arm
+
+Both arms were trained to completion on 2×T4. **Neither beat the untrained
+Qwen3-Embedding-0.6B baseline on nDCG@5**, the primary metric:
+
+| Run | nDCG@5 | Hit@5 | Recall@5 | MRR |
+|---|---|---|---|---|
+| baseline (untrained, epoch 0) | **0.548** | **0.786** | 0.396 | 0.602 |
+| `reader_kd`, best epoch (2/3) | 0.459 | 0.768 | 0.387 | 0.620 |
+| `hard_neg`, best epoch (1/4) | 0.509 | 0.779 | **0.402** | **0.633** |
+
+`hard_neg` epoch 1 dominates `reader_kd` epoch 2 on every metric, and is the only
+trained checkpoint anywhere that exceeds the baseline on anything (Recall@5 +0.006,
+MRR +0.031 — both inside noise). The two arms' **val losses are not comparable**:
+KL over a 20-doc list and cross-entropy over 1 positive + 4 negatives are different
+objectives on different scales, and reading the arms off those numbers inverts the
+ranking the retrieval metrics give.
+
+**Root cause — the teacher, not the objective.** In Salemi et al. the ROPG-KD target is
+`Eval(y, M(φp(x,[d])))`: the frozen reader is run with only document *d* in context and
+its output is scored against the **ground-truth label `y`**. Under greedy decoding that
+is deterministic — re-run it and the number is identical, reliability 1.0. Our
+`gen_ropg_data.py` substituted a subjective usefulness rating from `gpt-5.4-nano`,
+sampled **once at `temperature: 1.0`**. There is no reader in the loop at all; the mode
+name is aspirational. Measured on `train.jsonl` (1296 groups, 431 questions × 3 personas,
+171-chunk corpus):
+
+| Evidence | Value | Reading |
+|---|---|---|
+| split-half *r*, per-chunk mean teacher score (~10 queries/half) | 0.674 | single-label reliability ≈ **0.17** |
+| split-half *r*, per-chunk (crammer − scholar) contrast | 0.420 | persona signal is real but faint |
+| variance that is within-cell (across personas, same query+chunk) | 23.7% | most score variance is noise, not persona |
+| groups where rank-1 − rank-2 < 0.05 | 34% | the triplet positive is a coin flip |
+| groups where even the best doc scores < 0.5 | 10% | no useful doc exists; the positive is noise |
+| mean positive − negative gap (rank-1 vs ranks 17–20) | **0.711** (sd 0.183) | the extremes are far above the noise floor |
+| mean adjacent-rank gap, middle of the list | **0.02–0.03** | the graded middle is below it |
+
+Roughly 83% of every individual `teacher_score` is noise. The score histogram also
+shows the quantization this predicts, with mass piling on 0.05 / 0.12 / 0.15 / 0.18 /
+0.62 / 0.78 / 0.85.
+
+**Why that is fatal to KD but survivable for MNRL.** The last two rows are the whole
+argument. `kd_loss` softmaxes the *entire* graded ranking, so most of its gradient is
+spent asking the encoder to reproduce adjacent-rank differences smaller than the label
+noise — coin flips. `mnrl_loss` reads only the rank-1 vs rank-17..20 contrast, where the
+gap is 0.711. The same teacher supports one objective and not the other, which is why
+`hard_neg` is now the primary arm and `reader_kd` is retained as a documented ablation
+(`mode: reader_kd` still runs; `kd_loss` and `ScoredDataset` are untouched).
+
+**A structural difference from LaMP, not just an implementation slip.** In LaMP each
+user retrieves from **their own profile** — 55–205 personal documents, a different set
+per user — so personalization is carried by the corpus and `Eval(y, ·)` never has to be
+persona-aware. Simurgh shares **one 171-chunk corpus across all personas**, so every bit
+of personalization must come from *reordering the same documents*. Note the corpus size
+itself is in-distribution for LaMP; what is missing is the per-user corpus variation.
+The principled fix, and the adaptation it requires, is recorded in
+[things-to-consider](things-to-consider.md).
+
+**What this stage now does about it.** Three changes, each switchable so its contribution
+is separable (see [experiment-design](experiment-design.md) for the run table):
+
+1. **Label filters** (`configs/datagen_ropg.yaml` → `triplets.filters`, default off).
+   Drop groups whose rank-1/rank-2 margin is below `min_positive_margin` or whose best
+   doc scores below `min_positive_score` — precisely the 34% and 10% rows above.
+2. **Base-model anchoring** (`configs/train_ropg.yaml` → `anchor`). Every trained
+   checkpoint scoring *below* an untrained baseline while train loss collapses to 0.058
+   is the signature of destructive drift, not of underfitting, so the adapter is
+   penalised for moving away from the pretrained embedding. Two lambdas: personalization
+   is a property of the **query side only** — documents carry no persona — so the
+   document tower is held hard (`lambda_doc: 0.5`) while the query tower is left free
+   enough to learn persona conditioning (`lambda_query: 0.05`). `mode: doc_frozen` is the
+   limit case, encoding documents with the adapter off entirely.
+3. **Overfitting budget.** `lr` 2e-4 → 5e-5 and `epochs` → 3, since `hard_neg`'s best
+   epoch was its first.
+
+Reported honestly: as of this revision, **stage 1 has no result that beats the untrained
+encoder**, and the success criterion for the runs above is beating nDCG@5 0.548 — not
+beating the earlier trained checkpoints.
+
 ### Stage 2 — Rewriter: DPO
 
 The trained rewriter policy is built on top of the **fixed** ROPG-KD retriever.

@@ -145,6 +145,54 @@ Headline takeaways (from the paper, not derived here):
 - **Reward-hacking risk applies to the retriever too.** The Eval that trains the retriever is also the metric the system is judged on. A retriever optimized against a downstream metric can learn to satisfy the judge's surface preferences rather than fetching the documents the user actually needs. Guarding with retrieval-side metrics (Recall@K, MRR) and per-input selection-skill diagnostics (the paper's success-rate table is one such guard) is what keeps the optimization honest.
 - **Approximating the policy over the top-$l$ profile documents keeps both ROPG-RL and ROPG-KD tractable** as profile size grows. Hierarchical softmax is a drop-in alternative.
 
+## How our implementation diverges (and what that cost)
+
+Simurgh's stage-1 retriever extends ROPG-KD. Recording the deltas here because one of
+them turned out to be the reason the arm did not work; see
+[methodology](../methodology.md), "Why `reader_kd` was retired as the primary arm".
+
+| | Salemi et al. | Simurgh |
+|---|---|---|
+| Teacher signal | `Eval(y, M(φp(x,[d])))` — measured reader outcome vs. ground-truth `y` | subjective LLM-judge usefulness rating |
+| Teacher determinism | deterministic under greedy decoding; reliability 1.0 | single sample at `temperature: 1.0`; single-label reliability ≈ 0.17 |
+| Judge/reader model | FlanT5-XXL (11B), frozen | `gpt-5.4-nano` |
+| Source of personalization | **per-user corpus** (55–205 personal docs each) | one 171-chunk corpus shared by all personas; reordering only |
+| Retriever | Contriever (110M), **full fine-tune** | Qwen3-Embedding-0.6B + LoRA (r=8) |
+| Optimizer | lr 1e-5, 10 epochs, batch 64 | lr 5e-5, 3 epochs, batch 2 × world size |
+| Training data | 5k–20k examples per task | 1296 groups (431 questions × 3 personas) |
+| Candidate pool | top-`l`=16 profile docs | top-20 corpus chunks |
+
+Three of these matter more than the rest.
+
+**1. The teacher is a different object.** Theirs *measures* whether the reader answered
+correctly with that document in context; ours *asks an opinion* about usefulness. That
+substitution is the single change that broke the arm — a listwise KL objective is only
+as good as the ordering inside the graded distribution, and ours is mostly noise below
+the top and above the tail.
+
+**2. Personalization is structural for them, and not for us.** Because each LaMP user
+retrieves from their own profile, `Eval(y, ·)` needs no persona-awareness: the corpus
+already carries it. Sharing one corpus across personas removes that, and it is why a
+naive port of their teacher would produce identical scores for all three of our personas.
+Making the *reader* persona-conditioned is the adaptation that restores the signal — the
+deferred fix in [things-to-consider](../things-to-consider.md).
+
+**3. No temperatures in the paper.** `p_t` is a plain softmax over raw `Eval` scores, and
+the student side is Contriever's **unnormalized dot product**, whose dynamic range is
+naturally wide. Our cosine similarities live in [-1, 1], which forced us to invent
+`student_temp` / `teacher_temp` with nothing in the paper to calibrate against. They are a
+reasoned default, not a measured optimum, and the literature offers no cover here.
+
+Two textual notes on the paper itself:
+
+- Eq. 4 as written, `argmin Σ p_t log(π/p_t)`, is a sign slip — that expression is the
+  *negative* KL divergence, so minimizing it maximizes divergence. The intent is clearly
+  `KL(p_t ‖ π_θ)`, and our `F.kl_div(student_logprobs, gold_probs)` implements that intent.
+- **ROPG-KD is not the paper's best method.** RSPG-Post is (+5.5% average, significant on
+  6/7 datasets); the ROPG variants sit mid-table. We extended the weaker arm. RSPG-Post
+  needs the same infrastructure as the deferred teacher fix — a reader in the loop scoring
+  candidate outputs against gold — so one investment would unlock both.
+
 ## Notes
 
 - LaMP personalizes from each user's own historical documents; the *user profile* is the user's prior (input, output) pairs, not a declared attribute vector. Method transfers, but the LaMP setup itself is English, short-output, and benchmark-specific.

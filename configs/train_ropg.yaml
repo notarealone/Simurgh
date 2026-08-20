@@ -5,7 +5,13 @@
 #   hard_neg triplets ->  data/ropg_kd/{train,val}_triplets.jsonl
 #   hard_neg pairs    ->  data/ropg_kd/{train,val}_pairs.jsonl
 seed: 42
-mode: reader_kd           # hard_neg | reader_kd  (hard_neg is the MNRL ablation arm)
+# hard_neg | reader_kd. reader_kd is retained as a documented ablation, not the primary
+# arm: its teacher is a single-sample LLM-judge rating whose per-label reliability is
+# ~0.17, and a listwise KL objective weights the whole graded ranking — including the
+# middle, where adjacent teacher gaps (0.02-0.03) sit below that noise floor. MNRL reads
+# only the rank-1 vs tail contrast (gap 0.711), which survives the same teacher.
+# See docs/methodology.md, "Why reader_kd was retired".
+mode: hard_neg
 format: triplets          # triplets | pairs — only used when mode=hard_neg
 
 data:
@@ -27,7 +33,9 @@ training:
   # token per layer in fp16); with it only each block's input is stored, ~2.5 GB. There is
   # no batch_size/doc_micro_batch pair that fits without it. Cost is one extra forward.
   gradient_checkpointing: true
-  epochs: 5
+  # hard_neg's best epoch was 1 of 4: train loss fell 0.649 -> 0.058 while val retrieval
+  # dropped monotonically after epoch 1. This is an overfitting budget, not a compute one.
+  epochs: 3
   batch_size: 2          # groups per optimizer step; effective batch = this x world_size.
                          # The knob for *retained* activation memory: one graph is held
                          # until backward, so stored activations scale with tokens per step
@@ -44,7 +52,10 @@ training:
                          # FLOP. Measured on train.jsonl: 20 -> 1.68x faster, 10 -> 2.21x,
                          # 5 -> 2.54x. 10 takes nearly all the win while keeping launches
                          # large enough not to starve the GPU. 0 disables chunking entirely.
-  lr: 2.0e-4             # LoRA rate — a full-FT rate (2e-5) badly under-trains an adapter
+  # A full-FT rate (2e-5) under-trains an adapter, but 2e-4 over 1296 groups drove every
+  # checkpoint *below* the untrained baseline — the signature of destructive drift rather
+  # than of learning. 5e-5 keeps the adapter in adapter territory without that.
+  lr: 5.0e-5
   weight_decay: 0.01
   warmup_ratio: 0.1
   grad_clip: 1.0
@@ -54,7 +65,12 @@ training:
   # the KD gradient is close to noise, so both are sharpened well below 1.
   student_temp: 0.05     # student/retriever softmax temp (also the MNRL temp in hard_neg)
   teacher_temp: 0.2      # teacher/gold softmax temp (reader_kd only)
-  max_negatives: 4       # max hard negatives per query (hard_neg mode only)
+  # Max hard negatives per query (hard_neg only). Must not exceed what
+  # configs/datagen_ropg.yaml wrote into the triplet files: TripletDataset slices
+  # negatives[:max_negatives], so a larger value here silently trains on fewer.
+  # 4 -> 8 costs almost no signal (mean positive-negative gap 0.711 -> 0.686) and
+  # doubles the terms in the MNRL softmax.
+  max_negatives: 8
   max_documents: 20      # max docs per query (reader_kd mode only)
 
 lora:
@@ -80,5 +96,27 @@ eval:
   # Checkpoint rule is fixed: highest overall Recall@K, ties broken by lower val KD
   # loss, then higher MRR. Selecting on KD loss alone would reward an encoder that
   # matches the teacher while retrieving worse.
+
+# Base-model anchoring (hard_neg only). Penalises drift from the pretrained Qwen3
+# embedding, because the observed failure is that training moves the encoder *away* from
+# a baseline it never beats. Reference embeddings come from the same weights with the
+# LoRA adapter switched off, cached once at startup (~1.5k distinct texts), so the
+# regulariser costs no extra forward per step.
+anchor:
+  # none       — plain MNRL, the unanchored control arm
+  # both       — penalise drift on the query and document towers, weighted separately
+  # doc_frozen — encode documents with the adapter off entirely: an asymmetric
+  #              bi-encoder. Well motivated because Qwen3-Embedding is already used
+  #              asymmetrically (queries carry the `Instruct:` prefix, documents do not).
+  #              NOTE: this changes the serving contract — the FAISS index must then be
+  #              built with the adapter off, and only queries get the adapter. Do not
+  #              ship a doc_frozen checkpoint without rebuilding the index that way.
+  mode: both
+  # Two lambdas, not one. Personalisation is a property of the *query* side only —
+  # documents carry no persona — so the document tower should barely move while the query
+  # tower is where persona conditioning has to live. Ignored when mode is none, and
+  # lambda_doc is ignored under doc_frozen (the documents are already the base model).
+  lambda_doc: 0.5
+  lambda_query: 0.05
 
 checkpoint_dir: data/rl/ropg_kd_checkpoints

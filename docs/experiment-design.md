@@ -78,3 +78,31 @@ essential given the data scarcity above. (Both methods explained where results a
 - [ ] Retriever: BM25 vs frozen Qwen3-Embedding-0.6B vs ROPG-KD (full retriever ladder)
 - [ ] On-policy vs off-policy DPO pairs (iterative-DPO study) — optional
 - [ ] Document findings in [results](results/)
+
+## Stage-1 retriever runs (ROPG `hard_neg`)
+
+Four runs isolate each stage-1 change against the untrained encoder. Every row differs
+from **A** by exactly one component, which is what makes the attribution valid. All share
+`mode: hard_neg`, `format: triplets`, `lr: 5.0e-5`, `epochs: 3`, `max_negatives: 8`,
+`seed: 42`.
+
+| Run | `triplets.filters.enabled` | `anchor.mode` | Isolates |
+|---|---|---|---|
+| A | `false` | `none` | plain MNRL at the corrected LR/epoch budget — the control |
+| B | `false` | `both` | base-model anchoring |
+| C | `true` | `both` | label filtering |
+| D | `true` | `doc_frozen` | the asymmetric (frozen document tower) arm |
+
+- **Success criterion: nDCG@5 > 0.548**, the untrained Qwen3-Embedding-0.6B baseline —
+  *not* beating the earlier trained checkpoints, none of which cleared it. Report the
+  epoch-0 row in every table.
+- Filter thresholds for C and D: `min_positive_margin: 0.08`, `min_positive_score: 0.4`,
+  `min_negative_margin: 0.3`. Record retained/total from `{split}_triplets_meta.json`
+  alongside each result — expect roughly 800 of 1296 train groups retained.
+- **D changes the serving contract.** `doc_frozen` trains the query tower against a
+  document tower with the adapter off, so its index must be built the same way. Do not
+  compare D against A–D's numbers without confirming the eval encoded the corpus
+  base-only (`doc_base_only` in `evaluate_retrieval` handles this automatically).
+- No claim from this table is reportable until the paired bootstrap in
+  [things-to-consider](things-to-consider.md) exists: with *n* = 92 per persona, the
+  differences at stake are the size of one standard error.

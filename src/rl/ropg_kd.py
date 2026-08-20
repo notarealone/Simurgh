@@ -11,13 +11,25 @@ Stage 1 of Simurgh's two-stage training:
      and checkpoint on Recall@K (ties: lower val KL, then higher MRR).
 
 Supports two training modes:
-  - hard_neg: Multiple Negatives Ranking Loss (MNRL) — ablation arm
-  - reader_kd: KL-distillation against continuous reader scores — primary
+  - hard_neg: Multiple Negatives Ranking Loss (MNRL) over rank-1 vs. tail — **primary**
+  - reader_kd: listwise KL-distillation against the teacher's graded scores — retained
+    as a documented ablation, not the primary arm. Its teacher is a single-sample
+    LLM-judge rating (per-label reliability ~0.17), and KL weights the whole graded
+    ranking including the middle, where adjacent teacher gaps sit below that noise
+    floor. See docs/methodology.md, "Why reader_kd was retired".
+
+``hard_neg`` consumes pre-derived triplets and never builds them: derivation is owned by
+``python -m data.gen_ropg_data --config configs/datagen_ropg.yaml --derive-only``, which is
+free (no API calls, no model load). Deriving here would have to guess the label filters,
+which live in the datagen config, so a missing file would quietly yield an unfiltered run.
+The trainer instead validates ``train_triplets_meta.json`` against
+``training.max_negatives`` and refuses to start on stale data.
 
 The encoder here MUST stay byte-for-byte equivalent to inference
 (``rag.embedder.Qwen3Embedder``): last-token pooling, documents encoded bare, and
-queries wrapped as ``Instruct: {persona}\\nQuery: {text}``. ``tests/test_encoder_parity.py``
-is the gate on that; a pooling or prompt mismatch silently destroys the fine-tune.
+queries wrapped as ``Instruct: {persona}\\nQuery: {text}``. ``benchmarks/check_encoder_parity.py``
+is the gate on that and asserts cosine >= 0.999 on both sides; a pooling or prompt mismatch
+silently destroys the fine-tune while the loss curve still looks healthy.
 
 Runs on GPU (Kaggle / university cluster). Install the training extras first:
     uv sync --extra embedding --extra training
@@ -38,6 +50,7 @@ import json
 import logging
 import os
 import random
+from contextlib import contextmanager, nullcontext
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -306,6 +319,21 @@ class QwenEmbeddingModel(nn.Module):
         # cosine similarities stably, and every downstream loss is a softmax over them.
         return F.normalize(emb.float(), p=2, dim=1)
 
+    @contextmanager
+    def base_only(self):
+        """Encode with the LoRA adapter switched off — the pretrained model's own output.
+
+        This is what makes anchoring cheap: the reference embedding comes from the same
+        weights already in memory, so no second copy of the model is needed. A no-op when
+        training without LoRA, where the base and the trained model are the same thing.
+        """
+        disable = getattr(self.model, "disable_adapter", None)
+        if disable is None:
+            yield
+        else:
+            with disable():
+                yield
+
     def save_adapter(self, path: str | Path) -> None:
         """Persist LoRA weights (or the full model when training without LoRA)."""
         self.model.save_pretrained(str(path))
@@ -379,11 +407,22 @@ def mnrl_loss(
     pos_emb: torch.Tensor,
     neg_emb: torch.Tensor,
     temperature: float = 0.05,
+    neg_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Multiple Negatives Ranking Loss over one positive and N in-row negatives."""
+    """Multiple Negatives Ranking Loss over one positive and N in-row negatives.
+
+    *neg_mask* removes padded negative slots from the softmax. ``collate_triplets``
+    pads short rows with empty strings so the batch is rectangular, and an empty
+    string still encodes to a real vector — left unmasked it competes with the
+    positive as though it were a genuine hard negative. This was latent while every
+    group carried exactly ``max_negatives`` negatives; ``min_negative_margin`` in
+    ``derive_triplets`` makes row lengths ragged, which is what activates it.
+    """
     q = query_emb.float()
     pos_score = (q * pos_emb.float()).sum(dim=-1, keepdim=True)
     neg_scores = torch.bmm(neg_emb.float(), q.unsqueeze(-1)).squeeze(-1)
+    if neg_mask is not None:
+        neg_scores = neg_scores.masked_fill(~neg_mask, float("-inf"))
     all_scores = torch.cat([pos_score, neg_scores], dim=-1) / temperature
     labels = torch.zeros(q.size(0), dtype=torch.long, device=q.device)
     return F.cross_entropy(all_scores, labels)
@@ -450,7 +489,7 @@ def collate_triplets(
 
     q, p, n_tok = tok(queries), tok(positives), tok(negs_flat)
     B = len(batch)
-    return {
+    out = {
         "q_ids": q["input_ids"],
         "q_mask": q["attention_mask"],
         "p_ids": p["input_ids"],
@@ -459,6 +498,15 @@ def collate_triplets(
         "n_mask": n_tok["attention_mask"].view(B, max_negs, -1),
         "neg_mask": torch.tensor(neg_mask, dtype=torch.bool),
     }
+    # Row ids into the anchor cache, present only once build_anchor_cache has annotated
+    # the dataset. Padded negative slots point at row 0; neg_mask is what excludes them.
+    if "q_base" in batch[0]:
+        out["q_base"] = torch.tensor([x["q_base"] for x in batch], dtype=torch.long)
+        out["p_base"] = torch.tensor([x["p_base"] for x in batch], dtype=torch.long)
+        out["n_base"] = torch.tensor(
+            [x["n_base"] + [0] * (max_negs - len(x["n_base"])) for x in batch], dtype=torch.long
+        )
+    return out
 
 
 def collate_pairs(
@@ -515,20 +563,6 @@ def _move(batch: dict[str, torch.Tensor], device: torch.device) -> dict[str, tor
 # =============================================================================
 # Train / eval steps
 # =============================================================================
-
-
-def _mnrl_step(model, batch, temps, micro_batch):
-    student_temp, _ = temps
-    q_ids, q_mask = batch["q_ids"], batch["q_mask"]
-    p_ids, p_mask = batch["p_ids"], batch["p_mask"]
-    n_ids, n_mask = batch["n_ids"], batch["n_mask"]
-    B, N, L = n_ids.shape
-    q_emb = encode_chunked(model, q_ids, q_mask, micro_batch)
-    p_emb = encode_chunked(model, p_ids, p_mask, micro_batch)
-    n_emb = encode_chunked(model, n_ids.view(B * N, L), n_mask.view(B * N, L), micro_batch).view(
-        B, N, -1
-    )
-    return mnrl_loss(q_emb, p_emb, n_emb, student_temp)
 
 
 def _kd_step(model, batch, temps, micro_batch):
@@ -674,6 +708,131 @@ def encode_texts(
     return torch.cat(out, dim=0)
 
 
+# =============================================================================
+# Base-model anchoring
+# =============================================================================
+
+
+@torch.no_grad()
+def build_anchor_cache(
+    model,
+    tokenizer,
+    datasets: list[Dataset],
+    device: torch.device,
+    batch_size: int,
+    max_length: int,
+    amp_dtype: torch.dtype,
+    use_amp: bool,
+) -> torch.Tensor:
+    """Encode every distinct text across *datasets* with the adapter off, once, up front.
+
+    Returns the cache matrix and annotates each item in place with ``q_base``/``p_base``/
+    ``n_base`` row ids into it, which ``collate_triplets`` forwards to the loss. Train and
+    val share one cache and one row map: the val loader runs the same step function, so a
+    val item with no row id would fault on the anchor lookup.
+
+    Caching rather than recomputing is what makes anchoring free. The alternative — a
+    second ``base_only`` forward inside every step — is simpler but costs one extra
+    forward per step, roughly +40% wall clock. It is affordable here only because the
+    corpus is 171 chunks: unique texts run to ~1.5k, so the cache is a few MB and the
+    encode is a one-off of a couple of minutes against multi-hour epochs.
+    """
+    texts: list[str] = []
+    row_of: dict[str, int] = {}
+
+    def row(text: str) -> int:
+        if text not in row_of:
+            row_of[text] = len(texts)
+            texts.append(text)
+        return row_of[text]
+
+    for dataset in datasets:
+        for item in dataset.items:
+            item["q_base"] = row(item["query"])
+            item["p_base"] = row(item["positive"])
+            item["n_base"] = [row(t) for t in item["negatives"]]
+
+    with unwrap(model).base_only():
+        cache = encode_texts(
+            model,
+            tokenizer,
+            texts,
+            device,
+            batch_size,
+            max_length,
+            amp_dtype,
+            use_amp,
+            desc="anchor: base embeddings",
+        )
+    logger.info("Anchor cache: %d distinct texts, %.1f MB", len(texts), cache.numel() * 4 / 1e6)
+    return cache
+
+
+def anchor_penalty(emb: torch.Tensor, base: torch.Tensor) -> torch.Tensor:
+    """Mean cosine distance from the pretrained embedding. Zero when nothing has moved."""
+    return (1.0 - (emb.float() * base.float()).sum(dim=-1)).mean()
+
+
+def make_mnrl_step(anchor: dict | None, cache: torch.Tensor | None):
+    """Build the hard_neg step function, closing over the anchor config and cache.
+
+    A closure rather than extra parameters because ``train_epoch``/``eval_epoch`` call
+    ``step_fn(model, batch, temps, micro_batch)`` generically for both training modes;
+    widening that signature would touch the reader_kd path for no reason.
+
+    Anchoring exists because the failure mode here is *drift*, not underfitting: every
+    trained checkpoint so far scores at or below the untrained baseline while train loss
+    collapses. Two lambdas rather than one, because personalisation is a property of the
+    query side only — documents carry no persona — so the document tower should barely
+    move while the query tower is where persona conditioning has to live.
+    """
+    mode = (anchor or {}).get("mode", "none")
+    lambda_doc = float((anchor or {}).get("lambda_doc", 0.0))
+    lambda_query = float((anchor or {}).get("lambda_query", 0.0))
+
+    def step(model, batch, temps, micro_batch):
+        student_temp, _ = temps
+        q_ids, q_mask = batch["q_ids"], batch["q_mask"]
+        p_ids, p_mask = batch["p_ids"], batch["p_mask"]
+        n_ids, n_mask = batch["n_ids"], batch["n_mask"]
+        B, N, L = n_ids.shape
+
+        q_emb = encode_chunked(model, q_ids, q_mask, micro_batch)
+        if mode == "doc_frozen":
+            # The document tower is the pretrained model outright: no adapter, no grad.
+            # Strictly stronger than penalising doc drift, and it halves the trainable
+            # path. The serving index must then be built with the adapter off too — see
+            # the `anchor.mode` comment in configs/train_ropg.yaml.
+            with torch.no_grad(), unwrap(model).base_only():
+                p_emb = encode_chunked(model, p_ids, p_mask, micro_batch)
+                n_emb = encode_chunked(
+                    model, n_ids.view(B * N, L), n_mask.view(B * N, L), micro_batch
+                ).view(B, N, -1)
+        else:
+            p_emb = encode_chunked(model, p_ids, p_mask, micro_batch)
+            n_emb = encode_chunked(
+                model, n_ids.view(B * N, L), n_mask.view(B * N, L), micro_batch
+            ).view(B, N, -1)
+
+        loss = mnrl_loss(q_emb, p_emb, n_emb, student_temp, batch.get("neg_mask"))
+
+        if mode == "none" or cache is None:
+            return loss
+        if lambda_query:
+            loss = loss + lambda_query * anchor_penalty(q_emb, cache[batch["q_base"]])
+        # In doc_frozen the documents *are* the base model, so a doc penalty would be
+        # identically zero and carry no gradient — skip it rather than pay the lookup.
+        if lambda_doc and mode != "doc_frozen":
+            doc_emb = torch.cat([p_emb, n_emb[batch["neg_mask"]]], dim=0)
+            doc_base = torch.cat(
+                [cache[batch["p_base"]], cache[batch["n_base"][batch["neg_mask"]]]]
+            )
+            loss = loss + lambda_doc * anchor_penalty(doc_emb, doc_base)
+        return loss
+
+    return step
+
+
 @torch.no_grad()
 def evaluate_retrieval(
     model,
@@ -688,8 +847,14 @@ def evaluate_retrieval(
     max_length: int = 512,
     amp_dtype: torch.dtype = torch.float16,
     use_amp: bool = True,
+    doc_base_only: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """nDCG@1..K, Hit@1..K, Recall@K and MRR against the **full corpus**.
+
+    *doc_base_only* encodes the corpus with the adapter disabled, which ``anchor.mode:
+    doc_frozen`` requires: that arm trains the query tower against a frozen document
+    tower, so scoring it against an adapted index would measure a pairing that never
+    exists at train time and will not exist at serve time either.
 
     Returns ``(metrics, per_query)``: aggregates per persona and overall, plus the
     raw per-group vectors behind them. The vectors are what make significance testing
@@ -723,17 +888,19 @@ def evaluate_retrieval(
     The corpus is embedded once and reused across groups — re-encoding each group's
     docs made validation roughly 15x slower for identical numbers.
     """
-    corpus_matrix = encode_texts(
-        model,
-        tokenizer,
-        corpus_texts,
-        device,
-        batch_size,
-        max_length,
-        amp_dtype,
-        use_amp,
-        desc="eval: corpus",
-    )
+    corpus_ctx = model.base_only() if doc_base_only else nullcontext()
+    with corpus_ctx:
+        corpus_matrix = encode_texts(
+            model,
+            tokenizer,
+            corpus_texts,
+            device,
+            batch_size,
+            max_length,
+            amp_dtype,
+            use_amp,
+            desc="eval: corpus",
+        )
 
     query_matrix = encode_texts(
         model,
@@ -861,6 +1028,7 @@ def validate(
     max_length: int,
     can_eval_retrieval: bool,
     is_main: bool,
+    doc_base_only: bool = False,
 ) -> tuple[float, dict | None, dict | None]:
     """Val KD loss on **every** rank; retrieval metrics on rank 0 only.
 
@@ -888,6 +1056,7 @@ def validate(
         max_length,
         amp_dtype,
         use_amp,
+        doc_base_only,
     )
     metrics["val_loss"] = val_loss
     return val_loss, metrics, per_query
@@ -978,22 +1147,56 @@ def train(config: dict, rank: int = 0, world_size: int = 1, local_rank: int = 0)
         train_path = train_data / "train.jsonl"
         val_path = train_data / "val.jsonl"
 
-    if mode == "hard_neg" and not train_path.exists():
-        scored_train = train_data / "train.jsonl"
-        if not scored_train.exists():
+    if mode == "hard_neg":
+        # The trainer never derives triplets — it only validates them. Deriving here would
+        # have to guess the label filters, which live in configs/datagen_ropg.yaml, so a
+        # missing file would silently produce an *unfiltered* run under a config that says
+        # filtered. Derivation belongs to one owner:
+        #     python -m data.gen_ropg_data --config configs/datagen_ropg.yaml --derive-only
+        # (no API calls, no model load), then ship the files with the dataset.
+        #
+        # Existence alone is not a sufficient check: TripletDataset slices
+        # negatives[:max_negatives], so a file built with fewer negatives than the config
+        # asks for trains on fewer, silently and with a normal-looking loss curve.
+        # {split}_triplets_meta.json records what each file was built with; its absence
+        # means the file predates the sidecar and its provenance is unknown.
+        want_negatives = train_cfg.get("max_negatives", 4)
+        # Always the triplets sidecar, even in pairs format: derive_triplets writes one
+        # sidecar per split covering both outputs, since pairs are a cartesian expansion
+        # of the same negatives and share their provenance.
+        meta_path = train_data / "train_triplets_meta.json"
+        fix = (
+            "Re-derive with:\n"
+            "    python -m data.gen_ropg_data --config configs/datagen_ropg.yaml --derive-only\n"
+            "then upload the resulting *_triplets.jsonl / *_pairs.jsonl / "
+            "*_triplets_meta.json alongside train.jsonl."
+        )
+        if not train_path.exists():
+            raise FileNotFoundError(f"{train_path} not found (mode=hard_neg).\n{fix}")
+        if not meta_path.exists():
             raise FileNotFoundError(
-                f"Neither {train_path} nor {scored_train} found. "
-                "Run data generation first (src/data/gen_ropg_data.py)."
+                f"{meta_path} not found, so {train_path.name} has unknown provenance "
+                f"(it predates the sidecar).\n{fix}"
             )
-        if is_main:
-            logger.warning("%s missing — deriving from scored data.", train_path.name)
-            from data.gen_ropg_data import derive_triplets
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        have = meta.get("max_negatives", -1)
+        if have < want_negatives:
+            raise ValueError(
+                f"{train_path.name} was built with max_negatives={have}, but "
+                f"training.max_negatives={want_negatives}. Training would silently use "
+                f"{have} negatives per query.\n{fix}"
+            )
 
-            for sp in (train_data / "train.jsonl", train_data / "val.jsonl"):
-                if sp.exists():
-                    derive_triplets(sp, train_data, train_cfg.get("max_negatives", 4))
-        if is_ddp:
-            dist.barrier()
+        # Provenance: every run states which triplet build it trained on, so a result can
+        # be traced back to its filter settings without inspecting the data directory.
+        if is_main:
+            logger.info(
+                "Triplets: max_negatives=%s | filters=%s | groups %s/%s retained",
+                have,
+                meta.get("filters", {}).get("enabled"),
+                meta.get("groups_retained"),
+                meta.get("groups_total"),
+            )
 
     batch_size = train_cfg["batch_size"]
     num_epochs = train_cfg["epochs"]
@@ -1035,7 +1238,9 @@ def train(config: dict, rank: int = 0, world_size: int = 1, local_rank: int = 0)
             train_ds = PairDataset(str(train_path))
             val_ds = PairDataset(str(val_path)) if val_path.exists() else None
             collate_fn = lambda b: collate_pairs(b, tokenizer, max_length)  # noqa: E731
-        step_fn = _mnrl_step
+        # step_fn is built after the model exists: the anchor cache needs a forward
+        # pass with the adapter disabled, so it cannot be constructed here.
+        step_fn = None
     else:
         train_ds = ScoredDataset(str(train_path), max_documents)
         val_ds = ScoredDataset(str(val_path), max_documents) if val_path.exists() else None
@@ -1114,6 +1319,40 @@ def train(config: dict, rank: int = 0, world_size: int = 1, local_rank: int = 0)
             "Trainable params: %d / %d (%.3f%%)", trainable, total, 100 * trainable / total
         )
 
+    # Anchoring: build the base-embedding cache and the hard_neg step function now that
+    # the model exists. Done before the DDP wrap because it is a pure per-rank forward —
+    # no collectives — and every rank needs the identical cache anyway.
+    anchor_cfg = config.get("anchor") or {}
+    # Anchoring is a hard_neg construct: reader_kd's step function does not consume the
+    # cache, so leaving the mode set there would only mislead the eval path into
+    # base-encoding the corpus for a run that never froze the document tower.
+    anchor_mode = anchor_cfg.get("mode", "none") if mode == "hard_neg" else "none"
+    if step_fn is None:
+        cache = None
+        if anchor_mode != "none" and fmt == "triplets":
+            cache = build_anchor_cache(
+                model,
+                tokenizer,
+                [ds for ds in (train_ds, val_ds) if ds is not None],
+                device,
+                eval_batch_size,
+                max_length,
+                amp_dtype,
+                use_amp,
+            )
+        elif anchor_mode != "none":
+            # PairDataset has no negatives list, so the cache annotation would not apply.
+            logger.warning("anchor.mode=%s ignored: format=pairs is unanchored", anchor_mode)
+            anchor_mode = "none"
+        if is_main:
+            logger.info(
+                "Anchor: mode=%s lambda_doc=%s lambda_query=%s",
+                anchor_mode,
+                anchor_cfg.get("lambda_doc", 0.0),
+                anchor_cfg.get("lambda_query", 0.0),
+            )
+        step_fn = make_mnrl_step({**anchor_cfg, "mode": anchor_mode}, cache)
+
     if is_ddp:
         # static_graph=True lets the same parameters be used by several forwards per
         # step (doc micro-batching) without DDP raising "marked ready twice", and is
@@ -1169,6 +1408,7 @@ def train(config: dict, rank: int = 0, world_size: int = 1, local_rank: int = 0)
             max_length=max_length,
             can_eval_retrieval=can_eval_retrieval,
             is_main=is_main,
+            doc_base_only=anchor_mode == "doc_frozen",
         )
         if is_main:
             # No train_loss key: its absence is how the results cell recognises epoch 0.
@@ -1233,6 +1473,7 @@ def train(config: dict, rank: int = 0, world_size: int = 1, local_rank: int = 0)
                 max_length=max_length,
                 can_eval_retrieval=can_eval_retrieval,
                 is_main=is_main,
+                doc_base_only=anchor_mode == "doc_frozen",
             )
             entry["val_loss"] = val_loss
 

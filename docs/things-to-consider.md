@@ -35,6 +35,42 @@
 - [x] Synthesize corpus-grounded questions — done: `data/questions/ai_generated_questions.json`
 - [ ] Set dataset size; remaining data-scarcity mitigations (scrape more exam papers) tracked in [experiment-design](experiment-design.md)
 
+## Stage 1 retriever — after the `reader_kd` negative result
+
+Context and the full evidence table live in [methodology](methodology.md), "Why
+`reader_kd` was retired as the primary arm". Three items stay open.
+
+- [ ] **Reader-in-the-loop teacher — the principled fix, deferred.** Our teacher is a
+  subjective LLM-judge rating (single-label reliability ≈ 0.17); LaMP's is a *measured*
+  reader outcome, `Eval(y, M(φp(x,[d])))`, deterministic under greedy decoding. Every
+  question in the splits carries a gold `answer` — 259 `short_answer`, 130 `fill_blank`,
+  85 `true_false`, 79 `matching`, 56 `mcq`; only 9 essays lack one — so the real signal is
+  computable on **100% of the data**: exact match for the 241 closed-form questions,
+  ROUGE-1 for `short_answer`, at `temperature: 0`. Same call budget as today's judge
+  (20 reader calls per group instead of 20 judge calls). **The adaptation that matters:**
+  scoring against a single gold `y` is persona-*independent*, so a naive port would delete
+  the personalization signal entirely — LaMP gets persona-dependence from its per-user
+  corpus, which we do not have. The fix is to condition the **reader** on the persona,
+  `Eval(y, M(φp(x,[d],persona)))`: a chunk that lets a crammer-prompted reader answer
+  correctly differs from one that works for a scholar-prompted reader, and the score stays
+  deterministic. This also decomposes for free — run the reader with and without the
+  persona and the difference *is* the persona signal, measurable before committing a
+  training run to it.
+- [ ] **Paired significance testing — machinery exists, consumer does not.**
+  `evaluate_retrieval` returns per-query vectors and `training_log.json` persists them
+  precisely so epochs can be compared with a paired bootstrap, but nothing reads them
+  back. Until something does, no delta in the results tables may be claimed as real. The
+  numbers that make this urgent: per persona *n* = 92, giving SE ≈ 0.043 on Hit@5 and
+  ≈ 0.027 on nDCG@5 — so the *baseline* per-persona nDCG@5 spread (0.5368 / 0.5591) is
+  **under one standard error, before any gradient is taken**. "One persona trains better
+  than the others" is not currently distinguishable from noise.
+- [ ] **The metric shares the training labels' noise.** nDCG is graded against the same
+  teacher scores that train the encoder, so the untrained baseline's 0.548 may already be
+  near this measuring stick's ceiling — we cannot presently separate "training failed"
+  from "the metric is noise". A small human-labelled eval set (~100 groups, held out,
+  never trained on) is the only clean way out, and it is what the existing
+  human-validation TODO under **Reward Signal** should be scoped to cover.
+
 ## Open Questions
 
 - [x] Which small (≤7B) model for the **rewriter** policy? → **Qwen3-4B + LoRA**
@@ -64,3 +100,8 @@
 - *DDP launcher.* Multi-GPU ROPG-KD is launched with `torchrun` (a plain `!torchrun` cell, as in the supervisor's notebooks); the `torch.multiprocessing.spawn` path was removed. Rationale: the first 2x T4 attempt under spawn hung with no progress and no traceback, while torchrun surfaced a clean per-rank traceback on its first run — and torchrun is what the ecosystem and the supervisor's scripts assume. The likely cause of the hang was NCCL rendezvous, so the launch sets `NCCL_SHM_DISABLE=1` / `NCCL_P2P_DISABLE=1` (Kaggle's small `/dev/shm` and the absence of NVLink can stall NCCL's default transports; the bandwidth cost is irrelevant for ~5M LoRA gradients) and `init_process_group` uses a 10-minute timeout instead of NCCL's ~30-minute default, so a stall raises rather than hangs. `--standalone` picks a fresh rendezvous port per run so a crashed attempt cannot block the next. Consequence: `CFG` must be written to YAML before launch, since a fresh interpreter cannot be handed a Python dict — which also leaves each run reproducible from its config artifact. **Honest caveat:** the original hang was worked around, not root-caused; if DDP stalls again, start with `NCCL_DEBUG=INFO`.
 - *ROPG-KD softmax temperatures.* student 0.05, teacher 0.2 (previously 1.0 for both). Rationale: student scores are cosine similarities in [-1, 1] and teacher scores lie in [0, 1]; at temperature 1.0 a softmax over 20 candidates is near-uniform on both sides, so the KD gradient carries almost no signal. Still to be confirmed by ablation — a reasoned default, not a measured optimum. See Stage 1 in [methodology](methodology.md).
 - *`src/rl/scorer.py` status.* Superseded by the datagen notebook (`notebooks/gen_ropg_data.ipynb`) and `configs/datagen_ropg.yaml`, which now produce `data/ropg_kd/{train,val}.jsonl` directly. The module is kept only pending cleanup and should not be treated as the source of truth for the ROPG-KD scoring pipeline.
+- *ROPG-KD primary arm — `hard_neg`, not `reader_kd`.* Both arms trained to completion; neither beat the untrained encoder on nDCG@5 (baseline 0.548, `hard_neg` best 0.509, `reader_kd` best 0.459). `hard_neg` epoch 1 dominates `reader_kd` epoch 2 on every retrieval metric, and the two arms' **val losses are not comparable** — KL over 20 docs vs. cross-entropy over 1 positive + 4 negatives are different objectives on different scales, and comparing them inverts the ranking. Rationale for the split: the judge's per-label reliability is ≈ 0.17, and the two objectives read different parts of that noisy distribution. `mnrl_loss` consumes only the rank-1 vs rank-17..20 contrast, where the mean gap is **0.711**; `kd_loss` softmaxes the entire graded ranking, including the middle, where adjacent-rank gaps are **0.02–0.03** — below the noise floor. The same teacher therefore supports one objective and not the other. `reader_kd` is retained and runnable as a documented ablation. See [methodology](methodology.md).
+- *ROPG-KD teacher model — recorded as mini, actually nano.* The *Data-generation judges* entry above specifies **gpt-5.4-mini** for ROPG-KD teacher scoring, but `configs/datagen_ropg.yaml` has always run **gpt-5.4-nano** (`judge.model`), and that is what produced the current `data/ropg_kd/*.jsonl`. The existing labels are therefore from a weaker judge than the design called for, which is one plausible contributor to the 0.17 reliability figure. Not corrected in place: re-judging costs a full datagen pass and the reader-in-the-loop fix above is the better use of that budget. Recorded so no one reads the design entry and assumes mini produced the data.
+- *ROPG-KD base-model anchoring.* Added `anchor` (`none` | `both` | `doc_frozen`, plus `lambda_doc`/`lambda_query`) to `configs/train_ropg.yaml`. Rationale: every trained checkpoint scored at or below the untrained baseline while train loss collapsed 0.649 → 0.058 — the signature of destructive drift from a strong pretrained encoder, not of underfitting, which also rules out "train more LoRA parameters" as the fix. The adapter is penalised by cosine distance from the pretrained embedding, whose reference vectors come from the same weights with the adapter switched off (`QwenEmbeddingModel.base_only`), cached once at startup over the ~1.5k distinct texts, so there is no extra forward per step. **Two lambdas, not one:** personalization is a property of the *query* side only — documents carry no persona — so the document tower is held hard while the query tower stays free enough to learn persona conditioning. `doc_frozen` is the limit case and **changes the serving contract**: the FAISS index must then be built with the adapter off, with only queries adapted, so a `doc_frozen` checkpoint must not ship against an adapted index.
+- *ROPG-KD label filters.* Added `triplets.filters` to `configs/datagen_ropg.yaml`, **default off** so the unfiltered arm stays reproducible from config alone. They drop groups whose supervision is measurably noise: **34%** of train groups have a rank-1/rank-2 margin under 0.05, making the choice of positive a coin flip, and **10%** have no doc scoring above 0.5 at all, so the positive is noise by construction. Filtered vs. unfiltered is a config swap over one code path, run as an ablation rather than assumed. Deriving triplets needs no judge calls — it re-reads the existing `{train,val}.jsonl` — so the knob costs seconds. Each run writes `{split}_triplets_meta.json` recording the thresholds and retained/total counts.
+- *ROPG-KD `max_negatives` was never wired.* `derive_triplets` read `cfg["max_negatives"]` from the **top level** of `configs/datagen_ropg.yaml`, where no such key has ever existed, so every triplet file was built with the default 4 regardless of config. Now read from `triplets.max_negatives` and raised to 8: the mean positive−negative gap only falls 0.711 → 0.686 while the MNRL softmax gains twice the contrastive terms. Two related fixes shipped with it — negatives are sliced with the positive excluded (at `max_negatives >= len(docs)` the window reached back far enough to emit the positive as its own negative), and `mnrl_loss` now honours the `neg_mask` that `collate_triplets` had always produced but nothing consumed. The mask was latent while every group carried exactly 4 negatives; `min_negative_margin` makes row lengths ragged, at which point padded empty-string slots would otherwise compete with the positive as genuine hard negatives.

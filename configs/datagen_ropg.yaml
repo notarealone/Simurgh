@@ -19,3 +19,32 @@ data:
   output_dir: data/ropg_kd
 
 seed: 42
+
+# Derivation of hard-negative triplets/pairs from the scored data. This block is read
+# by derive_triplets() and applies to *both* gen_ropg_data.py and the lazy re-derive
+# inside src/rl/ropg_kd.py. None of it needs the judge: it re-reads the existing
+# data/ropg_kd/{train,val}.jsonl, so changing anything here costs seconds, not API calls.
+triplets:
+  # Negatives per group, taken from the tail of the judged top-20 and written
+  # hardest-first. Raising 4 -> 8 barely costs signal (the mean positive-negative gap
+  # falls 0.711 -> 0.686) while doubling the terms in the MNRL softmax, which lowers
+  # gradient variance. Costs 10 sequences per row instead of 6.
+  max_negatives: 8
+
+  # The teacher (an LLM judge, see docs/methodology.md) has a single-label reliability
+  # of roughly 0.17, so a large share of groups carry supervision that is noise rather
+  # than signal. These drop the groups where that is measurable. Default off: the
+  # unfiltered arm must stay reproducible from config alone.
+  filters:
+    enabled: false
+    # Drop the group if rank-1 and rank-2 are within this — which one becomes "the
+    # positive" is then a coin flip. 34% of train groups fail this at 0.05.
+    min_positive_margin: 0.08
+    # Drop the group if even its best candidate scores below this: the judge found
+    # nothing useful in the pool, so the positive is noise by construction. 10% of
+    # train groups fail this at 0.5.
+    min_positive_score: 0.4
+    # Drop an individual negative that sits too close to the positive to be a safe
+    # negative. Rarely binds — tail negatives average 0.049 against a 0.760 positive —
+    # and is kept as cheap insurance for groups with a flat judged list.
+    min_negative_margin: 0.3

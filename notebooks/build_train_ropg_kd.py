@@ -26,29 +26,30 @@ worker = MODULE.replace(
 )
 assert "personalization.profiles" not in worker, "profiles import not inlined"
 
-# Inline derive_triplets the same way: it is imported lazily in hard_neg mode when the
-# triplet files are missing, and `data` is not an importable package on Kaggle either.
-GEN = (ROOT / "src" / "data" / "gen_ropg_data.py").read_text(encoding="utf-8")
-_start = GEN.index("def derive_triplets(")
-_end = GEN.index("\ndef ", _start) + 1
-derive_body = GEN[_start:_end].rstrip()
-worker = worker.replace(
-    "            from data.gen_ropg_data import derive_triplets\n\n",
-    "",
+# derive_triplets is deliberately NOT inlined. The trainer validates the triplet files and
+# refuses to run on stale ones; it never rebuilds them, because rebuilding here cannot know
+# the label filters (those live in configs/datagen_ropg.yaml) and would silently produce an
+# unfiltered run. If this assert fires, a re-derive path crept back into the trainer and the
+# `data` package it needs does not exist on Kaggle.
+assert "import data.gen_ropg_data" not in worker, (
+    "the trainer must not import derive_triplets — derivation belongs to "
+    "gen_ropg_data.py --derive-only"
 )
-worker = worker.replace(
-    "# --- end inlined profiles ---",
-    "# --- end inlined profiles ---\n\n"
-    "# --- inlined from src/data/gen_ropg_data.py (no repo install on Kaggle) ---\n"
-    + derive_body
-    + "\n# --- end inlined derive_triplets ---",
+assert "from data.gen_ropg_data import" not in worker, (
+    "the trainer must not import derive_triplets — derivation belongs to "
+    "gen_ropg_data.py --derive-only"
 )
-assert "data.gen_ropg_data" not in worker, "derive_triplets import not inlined"
-assert worker.count("def derive_triplets(") == 1, "derive_triplets not inlined exactly once"
 
 # torchrun is the only multi-GPU launcher; catch a reintroduced in-process spawn.
 assert "mp.spawn" not in worker, "mp.spawn is gone from the launcher — do not reintroduce"
 assert "torch.multiprocessing" not in worker, "torch.multiprocessing import reintroduced"
+
+# The worker is written to a .py file and run by torchrun, so a syntax or indentation error
+# introduced by the inlining above surfaces only after the GPUs are already allocated.
+# Compiling it here turns that into a build-time failure. (This is exactly how a stray
+# indent shipped once: a hard-coded-indent str.replace matched the tail of a deeper-indented
+# line and left its leftover spaces glued to the next one.)
+compile(worker, "ropg_kd_worker.py", "exec")
 
 
 def md(text):
@@ -92,10 +93,25 @@ per GPU. Two consequences shape the cells below:
 3. Attach the `simurgh-data` dataset, **version 2+** (must contain `ropg_kd/` and `chunks/corpus.jsonl`).
 4. No API secrets needed - training makes no LLM calls.
 
+**`hard_neg` mode needs pre-derived triplets.** The trainer *validates* them and refuses to
+start otherwise; it never rebuilds them, because rebuilding here cannot know the label
+filters (those live in `configs/datagen_ropg.yaml`) and would silently give you an
+unfiltered run under a config that says filtered. So `ropg_kd/` must ship
+`{train,val}_triplets.jsonl` (or `_pairs.jsonl`) **and** `train_triplets_meta.json`, built
+with `max_negatives` at least as large as `CFG["training"]["max_negatives"]`. Rebuild them
+locally — no API calls, no model load, a few seconds:
+
+```bash
+python -m data.gen_ropg_data --config configs/datagen_ropg.yaml --derive-only
+```
+
+Each run logs the build it trained on (`Triplets: max_negatives=8 | filters=True | groups
+800/1296 retained`), which is how a filtered arm is confirmed after the fact.
+
 **Colab setup**
 1. Set `RUNTIME = "colab"` in the Config cell.
-2. Upload `simurgh-data/` to Drive at `MyDrive/simurgh-data/` with `ropg_kd/{train,val}.jsonl`
-   and `chunks/corpus.jsonl`.
+2. Upload `simurgh-data/` to Drive at `MyDrive/simurgh-data/` with `ropg_kd/{train,val}.jsonl`,
+   the derived triplet files above, and `chunks/corpus.jsonl`.
 3. Enable GPU accelerator. Checkpoints save straight to Drive, so the zip cell is skipped.
 """),
     code("""!pip install -q -U transformers accelerate peft
@@ -139,7 +155,11 @@ else:  # local
 # -- Inline config (mirrors configs/train_ropg.yaml) ---------------------------
 CFG = {
     "seed": 42,
-    "mode": "reader_kd",   # hard_neg | reader_kd
+    # reader_kd is retained as a documented ablation, not the primary arm: its teacher is
+    # a single-sample LLM-judge rating (per-label reliability ~0.17) and listwise KL
+    # weights the graded middle of the ranking, where adjacent teacher gaps (0.02-0.03)
+    # sit below that noise floor. MNRL reads only the rank-1 vs tail contrast (gap 0.711).
+    "mode": "hard_neg",    # hard_neg | reader_kd
     "format": "triplets",  # only used when mode=hard_neg
     "data": {
         "train_data": f"{DATA_ROOT}/ropg_kd",
@@ -162,7 +182,9 @@ CFG = {
         # Mirrors the YAML. Watch the wall clock before raising it: the last 2xT4 run took
         # ~1h52m per epoch, so 5 epochs is ~9.3h and will not finish inside a Kaggle
         # session. Lower it *here and in the YAML together* - the drift check compares them.
-        "epochs": 5,
+        # 3 is also the overfitting budget: hard_neg's best epoch was 1 of 4, with train
+        # loss falling 0.649 -> 0.058 while val retrieval dropped monotonically after it.
+        "epochs": 3,
         # groups per step; effective batch = this x n_gpus. The knob for *retained*
         # activation memory: one graph is held until backward, so stored activations
         # scale with tokens per step and only this controls them.
@@ -175,7 +197,9 @@ CFG = {
         # chunking wastes ~65% of every FLOP. Measured: 20 -> 1.68x, 10 -> 2.21x,
         # 5 -> 2.54x; 10 takes nearly all of it without starving the GPU. 0 disables.
         "doc_micro_batch": 10,
-        "lr": 2.0e-4,          # LoRA rate - a full-FT rate (2e-5) under-trains an adapter
+        # A full-FT rate (2e-5) under-trains an adapter, but 2e-4 over 1296 groups drove
+        # every checkpoint *below* the untrained baseline - drift, not learning.
+        "lr": 5.0e-5,
         "weight_decay": 0.01,
         "warmup_ratio": 0.1,
         "grad_clip": 1.0,
@@ -184,7 +208,9 @@ CFG = {
         # over 20 candidates is near-uniform on both sides and the gradient is noise.
         "student_temp": 0.05,
         "teacher_temp": 0.2,
-        "max_negatives": 4,
+        # Must not exceed what the triplet files were built with: TripletDataset slices
+        # negatives[:max_negatives], so a larger value here silently trains on fewer.
+        "max_negatives": 8,
         "max_documents": 20,
     },
     "lora": {
@@ -199,6 +225,19 @@ CFG = {
         # no-grad corpus + query encoding, so unconstrained by training batch_size;
         # rank 0 only, once per epoch.
         "eval_batch_size": 32,
+    },
+    # Base-model anchoring (hard_neg only). Penalises drift from the pretrained Qwen3
+    # embedding, since the observed failure is that training moves the encoder away from a
+    # baseline it never beats. Reference embeddings come from the same weights with the
+    # adapter switched off, cached once at startup - no extra forward per step.
+    "anchor": {
+        # none | both | doc_frozen. doc_frozen encodes documents with the adapter off
+        # entirely; it changes the serving contract, since the index must then be built
+        # the same way. Two lambdas because personalisation lives on the query side only -
+        # documents carry no persona, so the document tower should barely move.
+        "mode": "both",
+        "lambda_doc": 0.5,
+        "lambda_query": 0.05,
     },
     "checkpoint_dir": OUTPUT_DIR,
 }
