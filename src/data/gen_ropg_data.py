@@ -5,9 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import re
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -21,7 +24,17 @@ from rag.llm import OpenAICompatClient
 
 logger = logging.getLogger(__name__)
 
-FLOAT_RE = re.compile(r"[\d.]+")
+SCORE_RE = re.compile(r"(?:0(?:\.\d+)?|1(?:\.0+)?)")
+QUESTION_OUTPUT_FORMAT_VERSION = 4
+
+
+@dataclass(frozen=True)
+class QuestionContext:
+    """Retrieval text and judge-only gold context for one extracted question."""
+
+    query: str
+    answer: object | None
+    explanation: str | None
 
 
 def _load_corpus(path: Path) -> tuple[list[str], list[str]]:
@@ -40,27 +53,46 @@ def _load_corpus(path: Path) -> tuple[list[str], list[str]]:
 
 
 def _parse_float_score(response: str) -> float:
-    """Extract the first float from the LLM response and clamp to [0, 1]."""
-    m = FLOAT_RE.search(response)
-    if m is None:
-        logger.warning("Could not parse float from judge response: %r", response)
-        return 0.0
-    try:
-        score = float(m.group())
-    except ValueError:
-        logger.warning("Could not parse float from judge response: %r", response)
-        return 0.0
-    return max(0.0, min(1.0, score))
+    """Parse a judge response containing exactly one score in ``[0, 1]``."""
+    if not isinstance(response, str):
+        raise ValueError(f"Judge response is not a score string: {response!r}")
+    stripped = response.strip()
+    if SCORE_RE.fullmatch(stripped) is None:
+        raise ValueError(f"Judge response is not a single score in [0, 1]: {response!r}")
+    score = float(stripped)
+    if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+        raise ValueError(f"Judge response is not a finite score in [0, 1]: {response!r}")
+    return score
 
 
 def _build_judge_messages(
-    query: str, persona_rendered: str, chunk_text: str
+    query: str,
+    persona_rendered: str,
+    chunk_text: str,
+    answer: object | None = None,
+    explanation: str | None = None,
 ) -> list[dict[str, str]]:
+    # Gold fields are passed separately to the judge and never become part of query.
+    reference_sections: list[str] = []
+    if answer is not None:
+        rendered_answer = answer if isinstance(answer, str) else _render_question_value(answer)
+        reference_sections.append(f"Gold answer/reference:\n{rendered_answer}")
+    if explanation is not None:
+        reference_sections.append(f"Gold explanation/rubric:\n{explanation}")
+    reference_context = ""
+    if reference_sections:
+        reference_context = (
+            "Reference answer and rubric (judge context only; not part of the retrieval query):\n"
+            + "\n\n".join(reference_sections)
+            + "\n\n"
+        )
+
     system = "You are an expert Persian language tutor evaluating study materials."
     user = (
         "A student with the following profile is trying to answer an exam question:\n"
         f"Profile: {persona_rendered}\n\n"
         f"Exam question: {query}\n\n"
+        f"{reference_context}"
         f"Candidate study passage:\n{chunk_text}\n\n"
         "Rate 0.0–1.0 how useful this passage is for helping this specific student answer "
         "the question. Consider:\n"
@@ -75,21 +107,55 @@ def _build_judge_messages(
     ]
 
 
+class JudgeScoringError(RuntimeError):
+    """Raised when a chunk cannot be scored within the configured retry budget."""
+
+
 def _score_one_chunk(
     judge: OpenAICompatClient,
     query: str,
     persona_rendered: str,
     cid: str,
     ctext: str,
+    max_attempts: int = 3,
+    initial_backoff_seconds: float = 1.0,
+    backoff_multiplier: float = 2.0,
+    max_backoff_seconds: float = 8.0,
+    answer: object | None = None,
+    explanation: str | None = None,
 ) -> dict:
-    messages = _build_judge_messages(query, persona_rendered, ctext)
-    try:
-        response = judge.chat(messages)
-        score = _parse_float_score(response)
-    except Exception:
-        logger.warning("Judge call failed for chunk %s", cid, exc_info=True)
-        score = 0.0
-    return {"chunk_id": cid, "text": ctext, "teacher_score": score}
+    messages = _build_judge_messages(
+        query,
+        persona_rendered,
+        ctext,
+        answer=answer,
+        explanation=explanation,
+    )
+    backoff_seconds = initial_backoff_seconds
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = judge.chat(messages)
+            score = _parse_float_score(response)
+            return {"chunk_id": cid, "text": ctext, "teacher_score": score}
+        except Exception as exc:
+            logger.warning(
+                "Judge attempt failed for chunk %s (attempt %d/%d)",
+                cid,
+                attempt,
+                max_attempts,
+                exc_info=True,
+            )
+            if attempt == max_attempts:
+                raise JudgeScoringError(
+                    f"Failed to score chunk {cid!r} after {max_attempts} attempts"
+                ) from exc
+            time.sleep(backoff_seconds)
+            backoff_seconds = min(
+                backoff_seconds * backoff_multiplier,
+                max_backoff_seconds,
+            )
+
+    raise JudgeScoringError(f"Failed to score chunk {cid!r}")
 
 
 def _score_chunks(
@@ -99,18 +165,40 @@ def _score_chunks(
     chunk_ids: list[str],
     chunk_texts: list[str],
     max_workers: int = 8,
+    max_attempts: int = 3,
+    initial_backoff_seconds: float = 1.0,
+    backoff_multiplier: float = 2.0,
+    max_backoff_seconds: float = 8.0,
+    answer: object | None = None,
+    explanation: str | None = None,
 ) -> list[dict]:
     """Score chunks in parallel. Returns docs in the same order as input."""
-    results: dict[str, dict] = {}
+    results: list[dict | None] = [None] * len(chunk_ids)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_cid = {
-            executor.submit(_score_one_chunk, judge, query, persona_rendered, cid, ctext): cid
-            for cid, ctext in zip(chunk_ids, chunk_texts, strict=True)
+        future_to_index = {
+            executor.submit(
+                _score_one_chunk,
+                judge,
+                query,
+                persona_rendered,
+                cid,
+                ctext,
+                max_attempts=max_attempts,
+                initial_backoff_seconds=initial_backoff_seconds,
+                backoff_multiplier=backoff_multiplier,
+                max_backoff_seconds=max_backoff_seconds,
+                answer=answer,
+                explanation=explanation,
+            ): index
+            for index, (cid, ctext) in enumerate(zip(chunk_ids, chunk_texts, strict=True))
         }
-        for future in as_completed(future_to_cid):
+        for future in as_completed(future_to_index):
+            index = future_to_index[future]
             doc = future.result()
-            results[doc["chunk_id"]] = doc
-    return [results[cid] for cid in chunk_ids]
+            results[index] = doc
+    if any(doc is None for doc in results):
+        raise RuntimeError("Chunk scoring completed without a result for every input chunk")
+    return [doc for doc in results if doc is not None]
 
 
 def _load_split_qids(split_path: Path) -> list[tuple[str, str, str]]:
@@ -128,15 +216,103 @@ def _load_split_qids(split_path: Path) -> list[tuple[str, str, str]]:
     return entries
 
 
-def _load_question(exam_stem: str, qid: str, questions_dir: Path) -> str:
-    """Load a question JSON and return the *stem* text for *qid*."""
+def _render_question_value(value: object) -> str:
+    """Render an extracted value without changing string content."""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _render_numbered_section(label: str, values: object) -> str | None:
+    if values is None:
+        return None
+    entries = values if isinstance(values, list) else [values]
+    if not entries:
+        return None
+    rendered = "\n".join(
+        f"{index}. {_render_question_value(value)}"
+        for index, value in enumerate(entries, start=1)
+    )
+    return f"{label}:\n{rendered}"
+
+
+def _load_question(
+    exam_stem: str, qid: str, questions_dir: Path
+) -> QuestionContext:
+    """Load and render the complete retrieval context for *qid*."""
     qfile = questions_dir / f"{exam_stem}.json"
     if not qfile.exists():
         raise FileNotFoundError(f"Question file not found: {qfile}")
     data = json.loads(qfile.read_text(encoding="utf-8"))
     for q in data.get("questions", []):
         if q["id"] == qid:
-            return q["stem"]
+            sections: list[str] = []
+            group_id = q.get("group_id")
+            if group_id is not None:
+                passages = data.get("passages", data.get("passage", []))
+                matching_passage: object | None = None
+
+                if isinstance(passages, dict):
+                    if passages.get("id") == group_id or passages.get("group_id") == group_id:
+                        matching_passage = passages
+                    else:
+                        matching_passage = passages.get(group_id)
+                        if matching_passage is None:
+                            matching_passage = passages.get(str(group_id))
+                elif isinstance(passages, list):
+                    for passage in passages:
+                        if not isinstance(passage, dict):
+                            continue
+                        if passage.get("id") == group_id or passage.get("group_id") == group_id:
+                            matching_passage = passage
+                            break
+
+                if matching_passage is None:
+                    raise KeyError(
+                        f"Question {qid!r} in {qfile} references group_id={group_id!r}, "
+                        "but no matching top-level passage exists"
+                    )
+                if isinstance(matching_passage, dict):
+                    passage_text = matching_passage.get(
+                        "text", matching_passage.get("passage")
+                    )
+                else:
+                    passage_text = matching_passage
+                if passage_text is None:
+                    raise KeyError(
+                        f"Question {qid!r} in {qfile} references group_id={group_id!r}, "
+                        "but the matching top-level passage has no text"
+                    )
+                sections.append(f"Passage:\n{_render_question_value(passage_text)}")
+
+            sections.append(f"Question:\n{_render_question_value(q['stem'])}")
+
+            options_section = _render_numbered_section("Options", q.get("options"))
+            if options_section is not None:
+                sections.append(options_section)
+
+            pairs = q.get("pairs")
+            if isinstance(pairs, dict):
+                for side in ("left", "right"):
+                    pair_section = _render_numbered_section(
+                        f"Pairs ({side})", pairs.get(side)
+                    )
+                    if pair_section is not None:
+                        sections.append(pair_section)
+            elif pairs is not None:
+                pair_section = _render_numbered_section("Pairs", pairs)
+                if pair_section is not None:
+                    sections.append(pair_section)
+
+            items_section = _render_numbered_section("Items", q.get("items"))
+            if items_section is not None:
+                sections.append(items_section)
+
+            return QuestionContext(
+                query="\n\n".join(sections),
+                answer=q.get("answer"),
+                explanation=q.get("explanation"),
+            )
     raise KeyError(f"Question {qid!r} not found in {qfile}")
 
 
@@ -159,6 +335,31 @@ def run(config_path: str | Path) -> None:
     with config_path.open(encoding="utf-8") as fh:
         cfg = yaml.safe_load(fh)
 
+    judge_cfg = cfg["judge"]
+    max_attempts = judge_cfg.get("max_attempts", 3)
+    initial_backoff_seconds = judge_cfg.get("initial_backoff_seconds", 1.0)
+    backoff_multiplier = judge_cfg.get("backoff_multiplier", 2.0)
+    max_backoff_seconds = judge_cfg.get("max_backoff_seconds", 8.0)
+    if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or max_attempts < 1:
+        raise ValueError("judge.max_attempts must be an integer >= 1")
+    for setting_name, setting_value in (
+        ("initial_backoff_seconds", initial_backoff_seconds),
+        ("backoff_multiplier", backoff_multiplier),
+        ("max_backoff_seconds", max_backoff_seconds),
+    ):
+        if isinstance(setting_value, bool) or not isinstance(setting_value, (int, float)):
+            raise ValueError(f"judge.{setting_name} must be a finite number")
+        if not math.isfinite(float(setting_value)):
+            raise ValueError(f"judge.{setting_name} must be a finite number")
+    if initial_backoff_seconds < 0:
+        raise ValueError("judge.initial_backoff_seconds must be >= 0")
+    if backoff_multiplier < 1:
+        raise ValueError("judge.backoff_multiplier must be >= 1")
+    if max_backoff_seconds < initial_backoff_seconds:
+        raise ValueError(
+            "judge.max_backoff_seconds must be >= judge.initial_backoff_seconds"
+        )
+
     seed = cfg.get("seed", 42)
     np.random.seed(seed)
 
@@ -169,7 +370,7 @@ def run(config_path: str | Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     top_k = cfg["retriever"]["top_k"]
-    max_workers = cfg["judge"].get("max_workers", 8)
+    max_workers = judge_cfg.get("max_workers", 8)
 
     logger.info("Loading corpus from %s", corpus_path)
     chunk_ids, chunk_texts = _load_corpus(corpus_path)
@@ -185,16 +386,18 @@ def run(config_path: str | Path) -> None:
         device=cfg["embedder"]["device"],
         batch_size=cfg["embedder"].get("batch_size", 32),
         fp16=cfg["embedder"].get("fp16", False),
+        max_seq_length=cfg["embedder"]["max_seq_length"],
     )
     chunk_matrix = embedder.encode(chunk_texts)
 
-    logger.info("Initialising LLM judge (%s)", cfg["judge"]["model"])
+    logger.info("Initialising LLM judge (%s)", judge_cfg["model"])
     judge = OpenAICompatClient(
         base_url=OPENAI_BASE_URL,
         api_key=OPENAI_API_KEY,
-        model=cfg["judge"]["model"],
-        temperature=cfg["judge"]["temperature"],
-        max_completion_tokens=cfg["judge"]["max_completion_tokens"],
+        model=judge_cfg["model"],
+        temperature=judge_cfg["temperature"],
+        max_tokens=judge_cfg["max_completion_tokens"],
+        reasoning_effort=judge_cfg.get("reasoning_effort"),
     )
 
     train_profiles = train_personas()
@@ -213,55 +416,111 @@ def run(config_path: str | Path) -> None:
         # Build resume set from existing output
         seen: set[tuple[str, str]] = set()
         if output_path.exists():
-            for raw in output_path.read_text(encoding="utf-8").splitlines():
+            for line_number, raw in enumerate(
+                output_path.read_text(encoding="utf-8").splitlines(), start=1
+            ):
                 if not raw.strip():
                     continue
                 try:
                     rec = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"Malformed JSON in existing output {output_path} at line "
+                        f"{line_number}; refusing to resume"
+                    ) from exc
+                if not isinstance(rec, dict):
+                    raise ValueError(
+                        f"Existing output {output_path} line {line_number} is not a JSON "
+                        "object; refusing to resume"
+                    )
+                if "format_version" not in rec:
+                    raise ValueError(
+                        f"Existing output {output_path} line {line_number} has no format "
+                        "version; refusing to append"
+                    )
+                if rec["format_version"] != QUESTION_OUTPUT_FORMAT_VERSION:
+                    raise ValueError(
+                        f"Existing output {output_path} line {line_number} has format "
+                        f"version {rec['format_version']!r}, expected "
+                        f"{QUESTION_OUTPUT_FORMAT_VERSION}; refusing to append"
+                    )
+                try:
                     seen.add((rec["query"], rec["persona_id"]))
-                except (json.JSONDecodeError, KeyError):
-                    pass
+                except KeyError as exc:
+                    raise ValueError(
+                        f"Existing output {output_path} line {line_number} is missing "
+                        "query or persona_id; refusing to resume"
+                    ) from exc
             if seen:
                 logger.info("Resuming %s: %d records already written", split, len(seen))
 
+        failed_groups = 0
         with output_path.open("a", encoding="utf-8") as out_fh:
-            # Pre-load all valid question stems for this split
-            valid_entries: list[tuple[str, str, str, str]] = []
+            # Pre-load all valid complete question contexts for this split.
+            valid_entries: list[tuple[str, str, str, QuestionContext]] = []
             for exam_stem, qid, raw_line in entries:
                 try:
-                    query = _load_question(exam_stem, qid, questions_dir)
-                    valid_entries.append((exam_stem, qid, raw_line, query))
+                    question = _load_question(exam_stem, qid, questions_dir)
+                    valid_entries.append((exam_stem, qid, raw_line, question))
                 except (FileNotFoundError, KeyError) as exc:
                     logger.warning("Skipping %s: %s", raw_line, exc)
 
             for persona in train_profiles:
                 persona_rendered = render_profile(persona.id)
                 todo = [
-                    (i, e) for i, e in enumerate(valid_entries) if (e[3], persona.id) not in seen
+                    (i, e)
+                    for i, e in enumerate(valid_entries)
+                    if (e[3].query, persona.id) not in seen
                 ]
                 if not todo:
                     continue
                 query_vecs = embedder.encode_query(
-                    [e[3] for _, e in todo],
+                    [e[3].query for _, e in todo],
                     instruction=persona_rendered,
                 )
-                for j, (_, (_, _, _raw_line, query)) in enumerate(
+                for j, (_, (_, _, _raw_line, question)) in enumerate(
                     tqdm(todo, desc=f"{split}/{persona.id}", unit="q")
                 ):
                     query_vec = query_vecs[j : j + 1]
                     top_ids, top_texts = _retrieve_top_k(
                         query_vec, chunk_matrix, top_k, chunk_ids, chunk_texts
                     )
-                    docs = _score_chunks(
-                        judge, query, persona_rendered, top_ids, top_texts, max_workers
-                    )
+                    try:
+                        docs = _score_chunks(
+                            judge,
+                            question.query,
+                            persona_rendered,
+                            top_ids,
+                            top_texts,
+                            max_workers=max_workers,
+                            max_attempts=max_attempts,
+                            initial_backoff_seconds=initial_backoff_seconds,
+                            backoff_multiplier=backoff_multiplier,
+                            max_backoff_seconds=max_backoff_seconds,
+                            answer=question.answer,
+                            explanation=question.explanation,
+                        )
+                    except JudgeScoringError as exc:
+                        failed_groups += 1
+                        logger.error(
+                            "Skipping failed scoring group split=%s question=%s persona=%s: %s",
+                            split,
+                            _raw_line,
+                            persona.id,
+                            exc,
+                        )
+                        continue
                     rec = {
-                        "query": query,
+                        "format_version": QUESTION_OUTPUT_FORMAT_VERSION,
+                        "question_ref": _raw_line,
+                        "query": question.query,
                         "persona_id": persona.id,
                         "docs": docs,
                     }
                     out_fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
                     out_fh.flush()
+
+        logger.info("Finished %s split: %d failed scoring groups", split, failed_groups)
 
         # Convert scored data to hard-negative triplets/pairs for hard_neg training mode.
         # Read from the `triplets:` block — this used to read cfg["max_negatives"] at the
@@ -309,14 +568,39 @@ def derive_triplets(
     positive, or a group where the judge found nothing useful at all. It defaults to
     disabled, so the unfiltered arm stays reproducible from config alone.
 
-    Everything this function needs is defined inside it. ``notebooks/build_train_ropg_kd.py``
-    inlines it into the Kaggle worker by slicing from this function's header to the next
-    top-level definition, so a module-level helper would be silently dropped there and fail
-    with a NameError only on the notebook's lazy re-derive path.
+    Format validation stays in this function so normal generation, ``--derive-only``, and
+    the generated Kaggle notebook all reject stale scored data before replacing derived files.
     """
     stem = scored_path.stem  # e.g. "train" or "val"
     triplet_path = output_dir / f"{stem}_triplets.jsonl"
     pairs_path = output_dir / f"{stem}_pairs.jsonl"
+
+    # Validate the complete input before opening derived files in truncate mode. In
+    # particular, stem-only data predating complete question rendering must never be
+    # made to look current by running --derive-only.
+    scored_records: list[dict] = []
+    for line_number, raw in enumerate(
+        scored_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        if not raw.strip():
+            continue
+        try:
+            rec = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Malformed JSON in scored data {scored_path} at line {line_number}"
+            ) from exc
+        if not isinstance(rec, dict):
+            raise ValueError(
+                f"Scored data {scored_path} line {line_number} is not a JSON object"
+            )
+        if rec.get("format_version") != QUESTION_OUTPUT_FORMAT_VERSION:
+            raise ValueError(
+                f"Scored data {scored_path} line {line_number} has format version "
+                f"{rec.get('format_version')!r}, expected {QUESTION_OUTPUT_FORMAT_VERSION}; "
+                "regenerate scored data instead of using --derive-only"
+            )
+        scored_records.append(rec)
 
     filters = filters or {}
     enabled = bool(filters.get("enabled", False))
@@ -335,10 +619,7 @@ def derive_triplets(
         triplet_path.open("w", encoding="utf-8") as tf,
         pairs_path.open("w", encoding="utf-8") as pf,
     ):
-        for raw in scored_path.read_text(encoding="utf-8").splitlines():
-            if not raw.strip():
-                continue
-            rec = json.loads(raw)
+        for rec in scored_records:
             docs = rec.get("docs", [])
             n_groups += 1
             if len(docs) < 2:

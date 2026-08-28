@@ -66,7 +66,7 @@ from torch.utils.data import DataLoader, Dataset, DistributedSampler
 from tqdm.auto import tqdm
 from transformers import AutoModel, AutoTokenizer, get_linear_schedule_with_warmup
 
-from personalization.profiles import render_profile
+from personalization.profiles import render_profile, train_personas
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,19 @@ def format_query(query: str, persona_id: str | None) -> str:
     if not persona_id:
         return query
     return f"Instruct: {render_profile(persona_id)}\nQuery: {query}"
+
+
+# Persona-swap control (see ``evaluate_retrieval``). A rotation over the *train*
+# personas, in their declared order, so every group is re-rendered under a persona that
+# is not its own while the per-persona cell sizes stay identical. Derived rather than
+# hard-coded: adding a fourth training persona extends the cycle automatically, and the
+# held-out test persona is deliberately excluded — introducing it here would leak the
+# holdout into a validation-time diagnostic.
+_TRAIN_PERSONA_IDS = [p.id for p in train_personas()]
+PERSONA_ROTATION: dict[str, str] = {
+    pid: _TRAIN_PERSONA_IDS[(i + 1) % len(_TRAIN_PERSONA_IDS)]
+    for i, pid in enumerate(_TRAIN_PERSONA_IDS)
+}
 
 
 def last_token_pool(
@@ -848,8 +861,9 @@ def evaluate_retrieval(
     amp_dtype: torch.dtype = torch.float16,
     use_amp: bool = True,
     doc_base_only: bool = False,
+    swap_personas: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """nDCG@1..K, Hit@1..K, Recall@K and MRR against the **full corpus**.
+    """nDCG@1..K, Hit@1..K, Recall@K, MRR and judged@K against the **full corpus**.
 
     *doc_base_only* encodes the corpus with the adapter disabled, which ``anchor.mode:
     doc_frozen`` requires: that arm trains the query tower against a frozen document
@@ -878,8 +892,25 @@ def evaluate_retrieval(
       nDCG is shaped like the KD objective (both range over the teacher's graded
       distribution), so a coarser, differently-shaped metric belongs beside it.
 
+    * **judged@K** is a diagnostic, not a quality score: the fraction of the returned
+      top-K that the teacher actually judged. Only a group's own ~20 judged chunks
+      carry gain, so a model that surfaces *unjudged but relevant* chunks is punished
+      by nDCG for it. Recall rising while nDCG falls fits both "the graded middle got
+      worse" and "the retrieved set moved outside the judged pool"; judged@K is what
+      separates them. Read it beside nDCG, never instead of it.
+
     Note Recall@k divides by the size of that set, so Recall@1 could never exceed
     1/*relevance_top_m*; it is reported at k=K only, where the ceiling is 1.0.
+
+    *swap_personas* additionally scores every query under a **rotated** persona
+    (crammer→scholar→steady→crammer) against the same corpus embedding, and returns
+    the result under ``metrics["persona_swap"]``. This is the control for the thesis
+    claim: personas are only a prompt prefix, so an encoder that ignores that prefix
+    still improves every headline metric while personalising nothing. Measured on the
+    val labels, ranking with the wrong persona costs 0.33 nDCG@5, so a genuinely
+    persona-sensitive encoder must degrade visibly here. Rotation is used rather than a
+    random reassignment because it keeps the 92/92/92 persona balance exact and is
+    deterministic across runs.
 
     Only the group's own judged chunks have gains — the other ~150 corpus chunks score
     0 even if genuinely relevant. That incomplete-judgments bias predates nDCG and
@@ -902,93 +933,128 @@ def evaluate_retrieval(
             desc="eval: corpus",
         )
 
-    query_matrix = encode_texts(
-        model,
-        tokenizer,
-        [g["query"] for g in groups],
-        device,
-        batch_size,
-        max_length,
-        amp_dtype,
-        use_amp,
-    )
-    sims_all = query_matrix @ corpus_matrix.T  # (G, N)
-
     # Position i (0-based) in a ranking carries discount 1/log2(i+2).
     discount = 1.0 / np.log2(np.arange(2, top_k + 2))
     ks = list(range(1, top_k + 1))
-    names = [f"ndcg@{k}" for k in ks] + [f"hit@{k}" for k in ks] + [f"recall@{top_k}", "mrr"]
+    names = (
+        [f"ndcg@{k}" for k in ks]
+        + [f"hit@{k}" for k in ks]
+        + [f"recall@{top_k}", "mrr", f"judged@{top_k}"]
+    )
 
-    values: dict[str, list[float]] = {name: [] for name in names}
-    personas: list[str] = []
-    n_skipped = 0
+    def score(query_texts: list[str], desc: str | None, warn: bool) -> tuple[dict, dict]:
+        """Rank *query_texts* against the shared corpus embedding and aggregate.
 
-    for gi, group in enumerate(groups):
-        scored = sorted(
-            zip(group["chunk_ids"], group["scores"], strict=True),
-            key=lambda t: t[1],
-            reverse=True,
+        Factored out so the persona-swap pass reuses ``corpus_matrix`` — re-encoding
+        171 chunks a second time would double the cost of the whole eval for nothing.
+        """
+        query_matrix = encode_texts(
+            model,
+            tokenizer,
+            query_texts,
+            device,
+            batch_size,
+            max_length,
+            amp_dtype,
+            use_amp,
+            desc=desc,
         )
-        # Gains only for judged chunks that exist in the corpus. Restricting the ideal
-        # ranking the same way keeps nDCG's ceiling attainable — grading against chunks
-        # the retriever cannot return would depress every score by a constant.
-        gains_by_row = {
-            chunk_id_to_row[cid]: float(s) for cid, s in scored if cid in chunk_id_to_row
+        sims_all = query_matrix @ corpus_matrix.T  # (G, N)
+
+        values: dict[str, list[float]] = {name: [] for name in names}
+        personas: list[str] = []
+        n_skipped = 0
+
+        for gi, group in enumerate(groups):
+            scored = sorted(
+                zip(group["chunk_ids"], group["scores"], strict=True),
+                key=lambda t: t[1],
+                reverse=True,
+            )
+            # Gains only for judged chunks that exist in the corpus. Restricting the
+            # ideal ranking the same way keeps nDCG's ceiling attainable — grading
+            # against chunks the retriever cannot return would depress every score by
+            # a constant.
+            gains_by_row = {
+                chunk_id_to_row[cid]: float(s) for cid, s in scored if cid in chunk_id_to_row
+            }
+            relevant_rows = {
+                chunk_id_to_row[cid]
+                for cid, _ in scored[:relevance_top_m]
+                if cid in chunk_id_to_row
+            }
+            if not relevant_rows:
+                n_skipped += 1
+                continue
+
+            ranked = torch.argsort(sims_all[gi], descending=True).tolist()
+            head = ranked[:top_k]
+
+            gains = np.array([gains_by_row.get(row, 0.0) for row in head])
+            ideal = np.zeros(top_k)
+            best_gains = sorted(gains_by_row.values(), reverse=True)[:top_k]
+            ideal[: len(best_gains)] = best_gains
+            dcg = np.cumsum(gains * discount)
+            idcg = np.cumsum(ideal * discount)
+            ndcg = np.divide(dcg, idcg, out=np.zeros_like(dcg), where=idcg > 0)
+
+            found = np.cumsum([1.0 if row in relevant_rows else 0.0 for row in head])
+
+            rr = 0.0
+            for rank, row in enumerate(ranked, start=1):
+                if row in relevant_rows:
+                    rr = 1.0 / rank
+                    break
+
+            for i, k in enumerate(ks):
+                values[f"ndcg@{k}"].append(float(ndcg[i]))
+                values[f"hit@{k}"].append(1.0 if found[i] > 0 else 0.0)
+            values[f"recall@{top_k}"].append(float(found[-1]) / len(relevant_rows))
+            values["mrr"].append(rr)
+            # Purely diagnostic: what share of the returned head the teacher ever saw.
+            # A drop here means nDCG is grading an increasingly out-of-pool ranking.
+            values[f"judged@{top_k}"].append(
+                sum(1.0 for row in head if row in gains_by_row) / top_k
+            )
+            personas.append(group.get("persona_id") or "unknown")
+
+        if n_skipped and warn:
+            logger.warning(
+                "%d/%d val groups had no chunk_id matching the corpus and were skipped.",
+                n_skipped,
+                len(groups),
+            )
+
+        persona_arr = np.array(personas)
+        metrics: dict[str, Any] = {}
+        for name in names:
+            arr = np.array(values[name])
+            metrics[name] = {"overall": float(arr.mean()) if arr.size else 0.0}
+            for persona_id in sorted(set(personas)):
+                sel = arr[persona_arr == persona_id]
+                metrics[name][persona_id] = float(sel.mean()) if sel.size else 0.0
+
+        # Rounded: this lands in training_log.json once per epoch, and 4 dp is well past
+        # the resolution of a 276-query mean.
+        per_query = {"persona_ids": personas} | {
+            name: [round(v, 4) for v in values[name]] for name in names
         }
-        relevant_rows = {
-            chunk_id_to_row[cid] for cid, _ in scored[:relevance_top_m] if cid in chunk_id_to_row
-        }
-        if not relevant_rows:
-            n_skipped += 1
-            continue
+        return metrics, per_query
 
-        ranked = torch.argsort(sims_all[gi], descending=True).tolist()
-        head = ranked[:top_k]
+    metrics, per_query = score([g["query"] for g in groups], None, warn=True)
 
-        gains = np.array([gains_by_row.get(row, 0.0) for row in head])
-        ideal = np.zeros(top_k)
-        best_gains = sorted(gains_by_row.values(), reverse=True)[:top_k]
-        ideal[: len(best_gains)] = best_gains
-        dcg = np.cumsum(gains * discount)
-        idcg = np.cumsum(ideal * discount)
-        ndcg = np.divide(dcg, idcg, out=np.zeros_like(dcg), where=idcg > 0)
+    if swap_personas:
+        # Rotation, not shuffling: it reassigns every group to a different persona while
+        # leaving the persona counts untouched, so the swapped and matched numbers are
+        # aggregated over identically sized cells and the difference is attributable to
+        # the prefix alone. Groups whose persona is unknown are left as they are.
+        swapped = [
+            format_query(g["raw_query"], PERSONA_ROTATION.get(g["persona_id"], g["persona_id"]))
+            for g in groups
+        ]
+        swap_metrics, swap_per_query = score(swapped, "eval: persona-swap", warn=False)
+        metrics["persona_swap"] = {"metrics": swap_metrics, "per_query": swap_per_query}
 
-        found = np.cumsum([1.0 if row in relevant_rows else 0.0 for row in head])
-
-        rr = 0.0
-        for rank, row in enumerate(ranked, start=1):
-            if row in relevant_rows:
-                rr = 1.0 / rank
-                break
-
-        for i, k in enumerate(ks):
-            values[f"ndcg@{k}"].append(float(ndcg[i]))
-            values[f"hit@{k}"].append(1.0 if found[i] > 0 else 0.0)
-        values[f"recall@{top_k}"].append(float(found[-1]) / len(relevant_rows))
-        values["mrr"].append(rr)
-        personas.append(group.get("persona_id") or "unknown")
-
-    if n_skipped:
-        logger.warning(
-            "%d/%d val groups had no chunk_id matching the corpus and were skipped.",
-            n_skipped,
-            len(groups),
-        )
-
-    persona_arr = np.array(personas)
-    metrics: dict[str, Any] = {}
-    for name in names:
-        arr = np.array(values[name])
-        metrics[name] = {"overall": float(arr.mean()) if arr.size else 0.0}
-        for persona_id in sorted(set(personas)):
-            sel = arr[persona_arr == persona_id]
-            metrics[name][persona_id] = float(sel.mean()) if sel.size else 0.0
-
-    # Rounded: this lands in training_log.json once per epoch, and 4 dp is well past
-    # the resolution of a 276-query mean.
-    per_query = {"persona_ids": personas} | {
-        name: [round(v, 4) for v in values[name]] for name in names
-    }
     return metrics, per_query
 
 
@@ -1029,6 +1095,7 @@ def validate(
     can_eval_retrieval: bool,
     is_main: bool,
     doc_base_only: bool = False,
+    swap_personas: bool = False,
 ) -> tuple[float, dict | None, dict | None]:
     """Val KD loss on **every** rank; retrieval metrics on rank 0 only.
 
@@ -1057,9 +1124,34 @@ def validate(
         amp_dtype,
         use_amp,
         doc_base_only,
+        swap_personas,
     )
     metrics["val_loss"] = val_loss
     return val_loss, metrics, per_query
+
+
+def log_swap_block(metrics: dict, top_k: int) -> None:
+    """One line contrasting persona-matched retrieval with the rotated-persona control.
+
+    The delta *is* the personalisation signal. Near zero means the encoder is ignoring
+    the ``Instruct:`` prefix and every headline gain is generic retrieval quality —
+    the outcome the thesis has to rule out, so it is logged every epoch rather than
+    reconstructed afterwards.
+    """
+    swap = metrics.get("persona_swap")
+    if not swap:
+        return
+    sm = swap["metrics"]
+    logger.info(
+        "  persona-swap  nDCG@1 %.4f (%+.4f) | nDCG@%d %.4f (%+.4f) | MRR %.4f (%+.4f)",
+        sm["ndcg@1"]["overall"],
+        sm["ndcg@1"]["overall"] - metrics["ndcg@1"]["overall"],
+        top_k,
+        sm[f"ndcg@{top_k}"]["overall"],
+        sm[f"ndcg@{top_k}"]["overall"] - metrics[f"ndcg@{top_k}"]["overall"],
+        sm["mrr"]["overall"],
+        sm["mrr"]["overall"] - metrics["mrr"]["overall"],
+    )
 
 
 def log_eval_block(header: str, metrics: dict, top_k: int, suffix: str = "") -> None:
@@ -1073,10 +1165,12 @@ def log_eval_block(header: str, metrics: dict, top_k: int, suffix: str = "") -> 
         "  Hit@1..%d    %s", top_k, " ".join(f"{metrics[f'hit@{k}']['overall']:.3f}" for k in ks)
     )
     logger.info(
-        "  Recall@%d %.4f | MRR %.4f",
+        "  Recall@%d %.4f | MRR %.4f | judged@%d %.4f",
         top_k,
         metrics[f"recall@{top_k}"]["overall"],
         metrics["mrr"]["overall"],
+        top_k,
+        metrics[f"judged@{top_k}"]["overall"],
     )
     for persona_id in sorted(k for k in metrics["mrr"] if k != "overall"):
         logger.info(
@@ -1213,6 +1307,10 @@ def train(config: dict, rank: int = 0, world_size: int = 1, local_rank: int = 0)
     top_k = eval_cfg.get("top_k", 5)
     relevance_top_m = eval_cfg.get("relevance_top_m", 3)
     eval_batch_size = eval_cfg.get("eval_batch_size", 8)
+    # Cheap: it reuses the corpus embedding and only re-encodes 276 queries. On by
+    # default because a run without it cannot tell a personalisation gain from a
+    # generic retrieval gain, and that distinction is the thesis claim.
+    swap_personas = bool(eval_cfg.get("persona_swap", True))
 
     if is_main:
         logger.info(
@@ -1409,6 +1507,7 @@ def train(config: dict, rank: int = 0, world_size: int = 1, local_rank: int = 0)
             can_eval_retrieval=can_eval_retrieval,
             is_main=is_main,
             doc_base_only=anchor_mode == "doc_frozen",
+            swap_personas=swap_personas,
         )
         if is_main:
             # No train_loss key: its absence is how the results cell recognises epoch 0.
@@ -1419,6 +1518,7 @@ def train(config: dict, rank: int = 0, world_size: int = 1, local_rank: int = 0)
                 log_eval_block(
                     f"Baseline (untrained, epoch 0) | val {base_loss:.4f}", base_metrics, top_k
                 )
+                log_swap_block(base_metrics, top_k)
             else:
                 logger.info("Baseline (untrained, epoch 0) | val %.4f", base_loss)
             if device.type == "cuda":
@@ -1474,6 +1574,7 @@ def train(config: dict, rank: int = 0, world_size: int = 1, local_rank: int = 0)
                 can_eval_retrieval=can_eval_retrieval,
                 is_main=is_main,
                 doc_base_only=anchor_mode == "doc_frozen",
+                swap_personas=swap_personas,
             )
             entry["val_loss"] = val_loss
 
@@ -1494,6 +1595,7 @@ def train(config: dict, rank: int = 0, world_size: int = 1, local_rank: int = 0)
                         top_k,
                         "  *best*" if best_epoch == epoch else "",
                     )
+                    log_swap_block(metrics, top_k)
                 else:
                     if best is None or val_loss < best["val_loss"]:
                         best, best_epoch = {"val_loss": val_loss}, epoch
@@ -1535,7 +1637,11 @@ def train(config: dict, rank: int = 0, world_size: int = 1, local_rank: int = 0)
         # never beats the untrained encoder is a real result and belongs in the log at
         # WARNING, not buried in a table of per-epoch numbers.
         improved = False
-        for name in (f"ndcg@{top_k}", f"recall@{top_k}", "mrr"):
+        # Headline pair first — see docs/experiment-design.md, "Stage-1 retriever runs".
+        # nDCG@1 grades the single slot where the teacher's SNR is high; Recall@K is what
+        # is_better already selects on. nDCG@K trails because over half its mass sits in
+        # slots graded by teacher gaps below the label noise floor.
+        for name in ("ndcg@1", f"recall@{top_k}", "mrr", f"ndcg@{top_k}"):
             if name not in baseline or name not in best:
                 continue
             before, after = baseline[name]["overall"], best[name]["overall"]

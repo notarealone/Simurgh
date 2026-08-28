@@ -1,0 +1,19 @@
+{
+  "source": "train.jsonl",
+  "max_negatives": 8,
+  "filters": {
+    "enabled": false,
+    "min_positive_margin": 0.08,
+    "min_positive_score": 0.4,
+    "min_negative_margin": 0.3
+  },
+  "groups_total": 1296,
+  "groups_retained": 1296,
+  "pairs": 10368,
+  "dropped": {
+    "too_few_docs": 0,
+    "positive_margin": 0,
+    "positive_score": 0,
+    "no_negatives": 0
+  }
+}

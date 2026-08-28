@@ -125,14 +125,28 @@ DPO-only compute constraint.
   catch reward hacking (an encoder that scores well on the judge rubric but retrieves
   nothing useful).
 - **Validation relevance definition:** two notions are reported side by side.
-  - **nDCG@1–K (primary)** grades each judged doc by its raw teacher score (linear gain;
+  - **nDCG@1–K** grades each judged doc by its raw teacher score (linear gain;
     scores already lie in [0,1], so exponential gain would only compress them). No cutoff
     is drawn, and the ceiling is 1.0 at every K. This is the honest reading of a graded
     judge: measured on `val.jsonl`, mean teacher score by rank runs
     0.757 / 0.569 / 0.447 / 0.372 / 0.323, so a binary top-3 set counts the 1st and 3rd
     doc identically despite a ~1.7× difference in judged utility — and the rank-3 vs
     rank-4 gap is **under 0.05 in 53% of groups**, meaning the boundary mostly separates
-    near-ties.
+    near-ties. **The same graded reading cuts the other way deeper in the list**, which is
+    why the headline metric is nDCG@**1**, not nDCG@K: adjacent teacher gaps at slots
+    3→4 and 4→5 are only 0.075 and 0.049, at the label noise floor, and 53.4% of ideal
+    DCG@5's mass sits in slots 2–5. See [experiment-design](experiment-design.md),
+    "Primary metric — revised after run B".
+  - **judged@K (diagnostic)** — the share of the returned top-K the teacher ever scored.
+    Only ~20 of 171 corpus chunks are judged per group, so a model that surfaces
+    unjudged-but-relevant chunks is penalised by nDCG for improving. Recall up with nDCG
+    down fits both "the graded middle got worse" and "the ranking left the judged pool";
+    this is what separates them.
+  - **persona-swap (control)** — every val query re-scored under a rotated persona
+    against the same corpus embedding. Personas reach the retriever only through the
+    `Instruct:` prefix, so an encoder that ignores it improves every headline metric
+    while personalising nothing. Ranking with the wrong persona costs 0.33 nDCG@5 under
+    the val labels, so a persona-sensitive encoder has to degrade here.
   - **Recall@K / Hit@K / MRR** keep the binary set: the group's **top-3 docs by teacher
     score within the judged top-20 candidates**. Retained deliberately — nDCG ranges over
     the same graded distribution the KD loss is trained on, so a coarser, differently
@@ -163,7 +177,13 @@ DPO-only compute constraint.
 #### Why `reader_kd` was retired as the primary arm
 
 Both arms were trained to completion on 2×T4. **Neither beat the untrained
-Qwen3-Embedding-0.6B baseline on nDCG@5**, the primary metric:
+Qwen3-Embedding-0.6B baseline on nDCG@5**, at the time the sole primary metric (run B
+later forced that criterion to be revised — see
+[experiment-design](experiment-design.md), "Primary metric — revised after run B").
+Read under the revised headline pair, the `hard_neg` row below was already showing the
+pattern run B later showed much more strongly — **Recall@5 and MRR above baseline while
+nDCG@5 sits below it**. That was visible here and not acted on. nDCG@1 was not recorded
+for these two runs, so the comparison cannot be completed retrospectively:
 
 | Run | nDCG@5 | Hit@5 | Recall@5 | MRR |
 |---|---|---|---|---|
@@ -192,9 +212,11 @@ name is aspirational. Measured on `train.jsonl` (1296 groups, 431 questions × 3
 | split-half *r*, per-chunk mean teacher score (~10 queries/half) | 0.674 | single-label reliability ≈ **0.17** |
 | split-half *r*, per-chunk (crammer − scholar) contrast | 0.420 | persona signal is real but faint |
 | variance that is within-cell (across personas, same query+chunk) | 23.7% | most score variance is noise, not persona |
-| groups where rank-1 − rank-2 < 0.05 | 34% | the triplet positive is a coin flip |
-| groups where even the best doc scores < 0.5 | 10% | no useful doc exists; the positive is noise |
-| mean positive − negative gap (rank-1 vs ranks 17–20) | **0.711** (sd 0.183) | the extremes are far above the noise floor |
+| train groups dropped by margin < 0.05 | 258/1296 | the first sequential filter removes ambiguous positives |
+| train groups dropped by best score < 0.4 after the margin filter | another 109 | the second filter removes groups with no useful positive |
+| train groups retained after both filters | **929/1296** | the current filtered build |
+| validation groups retained after both filters | **206/276** | the current filtered build |
+| historical mean positive − negative gap (rank-1 vs ranks 17–20) | **0.711** (sd 0.183) | the historical extremes are far above the noise floor |
 | mean adjacent-rank gap, middle of the list | **0.02–0.03** | the graded middle is below it |
 
 Roughly 83% of every individual `teacher_score` is noise. The score histogram also
@@ -204,8 +226,10 @@ shows the quantization this predicts, with mass piling on 0.05 / 0.12 / 0.15 / 0
 **Why that is fatal to KD but survivable for MNRL.** The last two rows are the whole
 argument. `kd_loss` softmaxes the *entire* graded ranking, so most of its gradient is
 spent asking the encoder to reproduce adjacent-rank differences smaller than the label
-noise — coin flips. `mnrl_loss` reads only the rank-1 vs rank-17..20 contrast, where the
-gap is 0.711. The same teacher supports one objective and not the other, which is why
+noise — coin flips. `mnrl_loss` reads the rank-1 versus selected-negative contrast. The
+0.711 gap is the historical rank-17..20 measurement; current 8-negative artifacts select
+ranks 13-20 in rank order, and this selection is held fixed through Runs A-C for
+comparability. The same teacher supports one objective and not the other, which is why
 `hard_neg` is now the primary arm and `reader_kd` is retained as a documented ablation
 (`mode: reader_kd` still runs; `kd_loss` and `ScoredDataset` are untouched).
 
@@ -222,8 +246,9 @@ The principled fix, and the adaptation it requires, is recorded in
 is separable (see [experiment-design](experiment-design.md) for the run table):
 
 1. **Label filters** (`configs/datagen_ropg.yaml` → `triplets.filters`, default off).
-   Drop groups whose rank-1/rank-2 margin is below `min_positive_margin` or whose best
-   doc scores below `min_positive_score` — precisely the 34% and 10% rows above.
+   At the current thresholds, `min_positive_margin: 0.05` drops 258/1296 train groups;
+   `min_positive_score: 0.4` drops another 109 after that, leaving 929/1296. Validation
+   retains 206/276 groups.
 2. **Base-model anchoring** (`configs/train_ropg.yaml` → `anchor`). Every trained
    checkpoint scoring *below* an untrained baseline while train loss collapses to 0.058
    is the signature of destructive drift, not of underfitting, so the adapter is

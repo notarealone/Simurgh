@@ -56,14 +56,48 @@ Context and the full evidence table live in [methodology](methodology.md), "Why
   deterministic. This also decomposes for free — run the reader with and without the
   persona and the difference *is* the persona signal, measurable before committing a
   training run to it.
-- [ ] **Paired significance testing — machinery exists, consumer does not.**
-  `evaluate_retrieval` returns per-query vectors and `training_log.json` persists them
-  precisely so epochs can be compared with a paired bootstrap, but nothing reads them
-  back. Until something does, no delta in the results tables may be claimed as real. The
-  numbers that make this urgent: per persona *n* = 92, giving SE ≈ 0.043 on Hit@5 and
-  ≈ 0.027 on nDCG@5 — so the *baseline* per-persona nDCG@5 spread (0.5368 / 0.5591) is
-  **under one standard error, before any gradient is taken**. "One persona trains better
-  than the others" is not currently distinguishable from noise.
+- [x] **Paired significance testing — done.** `benchmarks/compare_runs.py` consumes the
+  per-query vectors from `training_log.json`: bootstrap CI on the paired mean difference,
+  sign-flip permutation p-value, Holm-corrected across the metric family, overall and per
+  persona. It compares epoch-vs-baseline within one log, arm-vs-arm across two, and
+  matched-vs-swapped persona within one (`--swap`). Cross-arm runs get a baseline-parity
+  check: two arms on the same val set must produce identical epoch-0 vectors, since the
+  adapter is the identity there. (A simpler epoch-vs-baseline bootstrap already lived in
+  `train_ropg_kd.ipynb`; the offline tool adds arm-vs-arm, p-values, per-persona
+  breakdowns, and the parity guard, and runs without a Kaggle session.) The numbers that
+  made this urgent: per persona *n* = 92, giving SE ≈ 0.043 on Hit@5 and ≈ 0.027 on
+  nDCG@5 — so the *baseline* per-persona nDCG@5 spread (0.5368 / 0.5591) is under one
+  standard error before any gradient is taken. "One persona trains better than the
+  others" is not distinguishable from noise.
+- [ ] **Persona-contrastive negatives — the personalisation lever, deferred.**
+  **Trigger: implement this if runs C and A plateau well below the persona-blind ceiling
+  *and* the persona-swap control shows the encoder ignoring the `Instruct:` prefix.** Not
+  before — at nDCG@5 0.522 the dominant deficit is generic retrieval, not
+  persona-blindness.
+  - *The gap.* `mnrl_loss` scores each query against **its own** negatives only
+    (`torch.bmm` in `src/rl/ropg_kd.py`) — there are no cross-query in-batch negatives.
+    Those negatives come from the tail of the judged list, i.e. plainly irrelevant
+    documents. Nothing in the objective ever asks why *this* chunk beats the one a
+    different persona wanted, so ignoring the persona prefix is a perfectly good way to
+    lower the loss. The model can win the whole headline table on generic Persian
+    retrieval and personalise nothing.
+  - *The ceiling it targets.* Computed from the val teacher scores, no model involved: a
+    perfect **persona-blind** ranker reaches nDCG@5 0.878, a perfect persona-matched one
+    1.000. That 0.122 is the entire Stage-1 personalisation headroom and is unreachable
+    by any amount of generic improvement. Mean top-3 overlap across the three personas is
+    0.411, and ranking with the *wrong* persona costs 0.33 nDCG@5 — the personas
+    genuinely disagree, so the headroom is real signal, not label noise.
+  - *The fix is data-level, not architectural.* Because negatives are per-row, this needs
+    no sampler, collator, or loss change: append the other two personas' positives to
+    each row's `negatives` inside `derive_triplets`, behind its own config flag and in a
+    separate field so the arm stays independently ablatable. The existing `neg_mask`
+    already handles the ragged rows that result.
+  - *Measured on `data/ropg_kd/train_triplets.jsonl`* (431 questions × 3 personas × 2
+    others = 2586 candidate additions): **64.7%** are new, genuine persona-contrastive
+    negatives; **5.9%** already sit in the row's hard negatives (no-op); **29.5%** are
+    identical to the row's own positive and must be dropped by an equality check. 83.8%
+    of questions have ≥2 distinct positives across personas and 44.1% have all three
+    distinct, which is why the signal exists at all.
 - [ ] **The metric shares the training labels' noise.** nDCG is graded against the same
   teacher scores that train the encoder, so the untrained baseline's 0.548 may already be
   near this measuring stick's ceiling — we cannot presently separate "training failed"
@@ -86,7 +120,12 @@ Context and the full evidence table live in [methodology](methodology.md), "Why
 - *Retriever starting point.* Phase 0 uses lexical BM25 (SQLite FTS5). Qwen3-Embedding-0.6B is validated as the dense base (Rung 1) before ROPG-KD fine-tuning (Rung 3).
 - *Rewriter policy model.* Qwen3-4B + LoRA.
 - *ROPG-KD teacher signal.* Direct document scoring chosen over generation-mediated scoring. Rationale: direct scoring requires one judge call per `(query, persona, document)` triple vs. one generation + one judge call for generation-mediated, and avoids generation noise obscuring the document's intrinsic utility. The generation-mediated option is noted in [methodology](methodology.md) for completeness.
-- *Data-generation judges.* **gpt-5.4-mini** for ROPG-KD teacher scoring, **gpt-5.4-nano** for DPO rewrite scoring; rewrite candidates are sampled from Gemma-4-E4B (the data-generation simulator); Qwen3-4B + LoRA is the policy being trained on those pairs. Rationale: price and generation time — the ROPG teacher scores 20 chunks per `(query, persona)` and warrants the stronger mini, while the DPO judge rates short rewrites where nano suffices. Per the guard-the-judge rule, the *evaluation* judge (still open above) must not reuse these models/prompts.
+- *Data-generation judges.* **gpt-5.4-nano** for ROPG-KD teacher scoring (this is what
+  `configs/datagen_ropg.yaml` sets and what actually produced `data/ropg_kd/`; the
+  original decision recorded here was gpt-5.4-**mini**, and the config is authoritative
+  because it is what ran — noted 2026-08-20. The weaker judge is a candidate explanation
+  for the ~0.17 single-label reliability and should be named as such in the thesis),
+  **gpt-5.4-nano** for DPO rewrite scoring; rewrite candidates are sampled from Gemma-4-E4B (the data-generation simulator); Qwen3-4B + LoRA is the policy being trained on those pairs. Rationale: price and generation time — the ROPG teacher scores 20 chunks per `(query, persona)` and warrants the stronger mini, while the DPO judge rates short rewrites where nano suffices. Per the guard-the-judge rule, the *evaluation* judge (still open above) must not reuse these models/prompts.
 - *Generator access.* One OpenAI-compatible client serves both API models (OpenAI, Google AI Studio) and local servers (LMStudio, llama.cpp); the endpoint and key come from the `OPENAI_BASE_URL` and `OPENAI_API_KEY` environment variables, the model from config.
 - *Checkpoint selection (ROPG-KD).* Best checkpoint = highest overall val Recall@K across personas (ties broken by lower val KD loss, then higher MRR) — not train/val KD loss alone. This guards against an encoder that minimises KL while degrading real retrieval (the reward-hacking check from Stage 1). Relevance for Recall@K/MRR is defined as the teacher's top-3 docs per `(query, persona)` group; alternatives considered are recorded in [methodology](methodology.md).
 - *ROPG-KD encoder parity.* The training encoder must match the serving encoder exactly: Qwen3-Embedding native **last-token** pooling, documents encoded bare, queries wrapped as `Instruct: <profile>\nQuery: <text>`. Rationale: an earlier revision mean-pooled over a raw `<profile>\n\n<query>` string while `src/rag/embedder.py` served with last-token pooling, so the adapter was trained through one pooling head and read out through another — a silent loss with no error and a normal-looking loss curve. `benchmarks/check_encoder_parity.py` gates this at cosine ≥ 0.999 and must pass before any ROPG-KD result is reported. The same applies to `max_seq_length`, which must match between training and index build or the same chunk gets two different embeddings.
@@ -103,5 +142,6 @@ Context and the full evidence table live in [methodology](methodology.md), "Why
 - *ROPG-KD primary arm — `hard_neg`, not `reader_kd`.* Both arms trained to completion; neither beat the untrained encoder on nDCG@5 (baseline 0.548, `hard_neg` best 0.509, `reader_kd` best 0.459). `hard_neg` epoch 1 dominates `reader_kd` epoch 2 on every retrieval metric, and the two arms' **val losses are not comparable** — KL over 20 docs vs. cross-entropy over 1 positive + 4 negatives are different objectives on different scales, and comparing them inverts the ranking. Rationale for the split: the judge's per-label reliability is ≈ 0.17, and the two objectives read different parts of that noisy distribution. `mnrl_loss` consumes only the rank-1 vs rank-17..20 contrast, where the mean gap is **0.711**; `kd_loss` softmaxes the entire graded ranking, including the middle, where adjacent-rank gaps are **0.02–0.03** — below the noise floor. The same teacher therefore supports one objective and not the other. `reader_kd` is retained and runnable as a documented ablation. See [methodology](methodology.md).
 - *ROPG-KD teacher model — recorded as mini, actually nano.* The *Data-generation judges* entry above specifies **gpt-5.4-mini** for ROPG-KD teacher scoring, but `configs/datagen_ropg.yaml` has always run **gpt-5.4-nano** (`judge.model`), and that is what produced the current `data/ropg_kd/*.jsonl`. The existing labels are therefore from a weaker judge than the design called for, which is one plausible contributor to the 0.17 reliability figure. Not corrected in place: re-judging costs a full datagen pass and the reader-in-the-loop fix above is the better use of that budget. Recorded so no one reads the design entry and assumes mini produced the data.
 - *ROPG-KD base-model anchoring.* Added `anchor` (`none` | `both` | `doc_frozen`, plus `lambda_doc`/`lambda_query`) to `configs/train_ropg.yaml`. Rationale: every trained checkpoint scored at or below the untrained baseline while train loss collapsed 0.649 → 0.058 — the signature of destructive drift from a strong pretrained encoder, not of underfitting, which also rules out "train more LoRA parameters" as the fix. The adapter is penalised by cosine distance from the pretrained embedding, whose reference vectors come from the same weights with the adapter switched off (`QwenEmbeddingModel.base_only`), cached once at startup over the ~1.5k distinct texts, so there is no extra forward per step. **Two lambdas, not one:** personalization is a property of the *query* side only — documents carry no persona — so the document tower is held hard while the query tower stays free enough to learn persona conditioning. `doc_frozen` is the limit case and **changes the serving contract**: the FAISS index must then be built with the adapter off, with only queries adapted, so a `doc_frozen` checkpoint must not ship against an adapted index.
-- *ROPG-KD label filters.* Added `triplets.filters` to `configs/datagen_ropg.yaml`, **default off** so the unfiltered arm stays reproducible from config alone. They drop groups whose supervision is measurably noise: **34%** of train groups have a rank-1/rank-2 margin under 0.05, making the choice of positive a coin flip, and **10%** have no doc scoring above 0.5 at all, so the positive is noise by construction. Filtered vs. unfiltered is a config swap over one code path, run as an ablation rather than assumed. Deriving triplets needs no judge calls — it re-reads the existing `{train,val}.jsonl` — so the knob costs seconds. Each run writes `{split}_triplets_meta.json` recording the thresholds and retained/total counts.
-- *ROPG-KD `max_negatives` was never wired.* `derive_triplets` read `cfg["max_negatives"]` from the **top level** of `configs/datagen_ropg.yaml`, where no such key has ever existed, so every triplet file was built with the default 4 regardless of config. Now read from `triplets.max_negatives` and raised to 8: the mean positive−negative gap only falls 0.711 → 0.686 while the MNRL softmax gains twice the contrastive terms. Two related fixes shipped with it — negatives are sliced with the positive excluded (at `max_negatives >= len(docs)` the window reached back far enough to emit the positive as its own negative), and `mnrl_loss` now honours the `neg_mask` that `collate_triplets` had always produced but nothing consumed. The mask was latent while every group carried exactly 4 negatives; `min_negative_margin` makes row lengths ragged, at which point padded empty-string slots would otherwise compete with the positive as genuine hard negatives.
+- *ROPG-KD label filters.* Added `triplets.filters` to `configs/datagen_ropg.yaml`, **default off** so the unfiltered arm stays reproducible from config alone. The current thresholds are `0.05 / 0.4 / 0.25` for `min_positive_margin`, `min_positive_score`, and `min_negative_margin`. Sequentially, the margin filter drops 258/1296 train groups and 51/276 validation groups, then the positive-score filter drops another 109 train groups and 19 validation groups. The exact retained counts are 929/1296 train and 206/276 validation. Filtered vs. unfiltered is a config swap over one code path, run as an ablation rather than assumed. Deriving triplets needs no judge calls: it re-reads the existing `{train,val}.jsonl`, so the knob costs seconds. Each run writes `{split}_triplets_meta.json` recording the thresholds and retained/total counts.
+- *ROPG-KD `max_negatives` was never wired.* `derive_triplets` read `cfg["max_negatives"]` from the **top level** of `configs/datagen_ropg.yaml`, where no such key has ever existed, so every triplet file was built with the default 4 regardless of config. Now read from `triplets.max_negatives` and raised to 8. Current 8-negative files intentionally use ranks 13-20 from the judged top 20, in rank order, and this behavior is frozen for Runs A-C despite the historical `hard_neg` name. Correcting that selection requires a new arm or rerunning earlier arms. The mean positive−negative gap only falls 0.711 → 0.686 while the MNRL softmax gains twice the contrastive terms. Two related fixes shipped with it: negatives are sliced with the positive excluded (at `max_negatives >= len(docs)` the window reached back far enough to emit the positive as its own negative), and `mnrl_loss` now honours the `neg_mask` that `collate_triplets` had always produced but nothing consumed. The mask was latent while every group carried exactly 4 negatives; `min_negative_margin` makes row lengths ragged, at which point padded empty-string slots would otherwise compete with the positive as genuine negatives.
+- *Open: alternative ROPG-KD negative selection.* Instead of the current ranks 13-20, select the highest-scored non-positive judged documents, ranks 2-9. This is the genuinely harder contrastive task and may provide stronger gradients, but rank 2 and nearby documents have the highest false-negative risk because teacher gaps are noisy. `min_negative_margin` would remove unsafe near-ties and make rows ragged. Current behavior is `sorted_docs[1:][-max_negatives:]`; the harder alternative is `sorted_docs[1:1 + max_negatives]`. This must be a separately named data/run arm, or comparison arms must be rerun, because changing it only for Run C would destroy filtering attribution.

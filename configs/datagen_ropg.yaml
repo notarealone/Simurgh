@@ -2,15 +2,25 @@ embedder:
   model: Qwen/Qwen3-Embedding-0.6B
   device: cpu
   batch_size: 128
+  # Must equal configs/train_ropg.yaml and index/serving settings;
+  # candidate mining must use the same document/query truncation contract.
+  max_seq_length: 2048
 
 retriever:
   top_k: 20
 
 judge:
-  model: gpt-5.4-nano
+  model: gpt-5.6-luna
+  reasoning_effort: none
   temperature: 1.0
   max_completion_tokens: 16
   max_workers: 8
+  # Retry API exceptions and malformed numeric responses with exponential, capped backoff;
+  # exhaustion logs/skips the whole (question, persona) group instead of assigning score zero.
+  max_attempts: 3
+  initial_backoff_seconds: 1.0
+  backoff_multiplier: 2.0
+  max_backoff_seconds: 8.0
 
 data:
   chunks: data/chunks/corpus.jsonl

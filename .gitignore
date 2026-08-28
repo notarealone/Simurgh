@@ -225,6 +225,7 @@ __marimo__/
 *.onnx
 *.safetensors
 checkpoints/
+models/
 
 # Data artifacts — track raw source text for reproducibility; ignore derived/large/built.
 data/raw/*

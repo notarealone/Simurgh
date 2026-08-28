@@ -102,11 +102,10 @@ with `max_negatives` at least as large as `CFG["training"]["max_negatives"]`. Re
 locally — no API calls, no model load, a few seconds:
 
 ```bash
-python -m data.gen_ropg_data --config configs/datagen_ropg.yaml --derive-only
+uv run python -m data.gen_ropg_data --config configs/datagen_ropg.yaml --derive-only
 ```
 
-Each run logs the build it trained on (`Triplets: max_negatives=8 | filters=True | groups
-800/1296 retained`), which is how a filtered arm is confirmed after the fact.
+Each run logs the build it trained on (`Triplets: max_negatives=8 | filters=False | groups 1296/1296 retained`), which is how an unfiltered arm is confirmed after the fact.
 
 **Colab setup**
 1. Set `RUNTIME = "colab"` in the Config cell.
@@ -134,6 +133,7 @@ from pathlib import Path
 
 # -- Runtime selector ---------------------------------------------------------
 RUNTIME = "kaggle"  # "kaggle" | "colab" | "local"
+ARM = "ropg_kd"  # "ropg_kd" (filters off) | "ropg_kd_filtered" (filters on)
 GDRIVE_BASE = "/content/drive/MyDrive/simurgh-data"  # Colab only
 
 if RUNTIME == "kaggle":
@@ -162,7 +162,16 @@ CFG = {
     "mode": "hard_neg",    # hard_neg | reader_kd
     "format": "triplets",  # only used when mode=hard_neg
     "data": {
-        "train_data": f"{DATA_ROOT}/ropg_kd",
+        # Which derived triplet set to train on - see docs/experiment-design.md,
+        # "Stage-1 retriever runs". Both directories are built from the *same* judged
+        # {train,val}.jsonl and differ only in whether the label filters ran:
+        #   ARM = "ropg_kd"           filters OFF  (runs A, B)
+        #   ARM = "ropg_kd_filtered"  filters ON   (runs C, D)
+        # This path is exempt from the drift check at the end of the notebook (local and
+        # Kaggle roots legitimately differ), so it will NOT warn if you forget to switch
+        # it. The per-run "Triplets: ... filters=..." line in the training log is the
+        # check that actually catches a wrong arm.
+        "train_data": f"{DATA_ROOT}/{ARM}",
         "corpus_path": f"{DATA_ROOT}/chunks/corpus.jsonl",
     },
     "embedder": {
@@ -222,6 +231,12 @@ CFG = {
     "eval": {
         "top_k": 5,
         "relevance_top_m": 3,  # relevant = top-m docs by teacher_score per group
+        # Persona-swap control: re-scores every val query under a rotated persona
+        # (crammer->scholar->steady->crammer) against the same corpus embedding and logs
+        # the matched-minus-swapped delta. Personas reach the retriever only through the
+        # `Instruct:` prefix, so an encoder that ignores it still improves every headline
+        # metric while personalising nothing. Cheap - the corpus embedding is reused.
+        "persona_swap": True,
         # no-grad corpus + query encoding, so unconstrained by training batch_size;
         # rank 0 only, once per epoch.
         "eval_batch_size": 32,
@@ -359,7 +374,20 @@ must be tested that way. Marginal confidence intervals on two means overlap far 
 than the paired difference contains zero — with ~276 queries a single epoch's interval is
 roughly ±0.04 wide, enough to hide a real gain of that size. Resampling the queries and
 taking the difference each time cancels the shared query difficulty, which is what makes
-the test sharp enough to be worth running."""),
+the test sharp enough to be worth running.
+
+This cell only answers *"did this run beat its own untrained baseline?"*. For
+**arm-vs-arm** comparison (run B against the unanchored run A control), per-persona
+breakdowns, permutation p-values with Holm correction across the metric family, and the
+persona-swap contrast, download `training_log.json` and use the offline tool:
+
+```bash
+uv run python benchmarks/compare_runs.py runA_log.json runB_log.json
+uv run python benchmarks/compare_runs.py runB_log.json --swap
+```
+
+It also verifies that two arms' epoch-0 rows are identical, which is the check that
+proves nothing leaked into the eval path between them."""),
     code("""import numpy as np
 
 if log.exists() and any("per_query" in e for e in data["epoch_metrics"]):
@@ -374,7 +402,11 @@ if log.exists() and any("per_query" in e for e in data["epoch_metrics"]):
         # data, never on the model, so index i is the same query in every epoch.
         n = len(base["mrr"])
         idx = rng.integers(0, n, (B, n))
-        names = [f"ndcg@{top_k}", f"hit@{top_k}", f"recall@{top_k}", "mrr"]
+        # Headline pair first (docs/experiment-design.md). judged@K is a diagnostic,
+        # not a quality score: a fall there means nDCG is grading an increasingly
+        # out-of-pool ranking rather than a worse one.
+        names = ["ndcg@1", f"recall@{top_k}", "mrr", f"ndcg@{top_k}", f"hit@{top_k}"]
+        names += [f"judged@{top_k}"] if f"judged@{top_k}" in base else []
         for ep in sorted(k for k in epochs if k != 0):
             print(f"epoch {ep} vs baseline   (n={n} queries, {B} bootstrap resamples)")
             for name in names:

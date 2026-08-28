@@ -15,7 +15,13 @@ mode: hard_neg
 format: triplets          # triplets | pairs — only used when mode=hard_neg
 
 data:
-  train_data: data/ropg_kd          # directory; file names derive from mode + format
+  # Selects the arm — see docs/experiment-design.md, "Stage-1 retriever runs".
+  # Both directories are derived from the same judged {train,val}.jsonl and differ only
+  # in whether the label filters ran (configs/datagen_ropg_filtered.yaml builds the
+  # filtered one). Currently: run B.
+  #   data/ropg_kd           filters OFF  (runs A, B)
+  #   data/ropg_kd_filtered  filters ON   (runs C, D)
+  train_data: data/ropg_kd  # directory; file names derive from mode + format
   corpus_path: data/chunks/corpus.jsonl  # ranked in full for Recall@K / MRR
 
 embedder:
@@ -84,11 +90,26 @@ eval:
                          # nDCG@1..K and Hit@1..K curves reported each epoch
   relevance_top_m: 3     # binary relevant set = top-m docs by teacher_score per group.
                          # Drives Recall@K / Hit@K / MRR only - nDCG grades by the raw
-                         # teacher_score and needs no cutoff, which is why it is the
-                         # primary metric: the rank-3 vs rank-4 score gap is under 0.05
-                         # in 53% of val groups, so this boundary mostly splits near-ties.
+                         # teacher_score and needs no cutoff. The boundary mostly splits
+                         # near-ties (the rank-3 vs rank-4 gap is under 0.05 in 53% of val
+                         # groups), which is why Recall@K is reported beside nDCG, not
+                         # instead of it. Headline pair is nDCG@1 + Recall@K; nDCG@K is
+                         # reported but no longer leads, because 53.4% of its mass sits in
+                         # slots 2-5 where adjacent teacher gaps (0.049-0.075) are at the
+                         # label noise floor. See docs/experiment-design.md, "Stage-1
+                         # retriever runs".
                          # Note Recall@k divides by m, so Recall@1 is capped at 1/m -
                          # hence Recall is reported at K only, where the ceiling is 1.0.
+  # Persona-swap control. Re-scores every val query under a *rotated* persona
+  # (crammer→scholar→steady→crammer) against the same corpus embedding, and logs the
+  # matched-minus-swapped delta each epoch. That delta is the personalisation signal in
+  # isolation: personas reach the retriever only through the `Instruct:` prefix, so an
+  # encoder that ignores the prefix still improves every headline metric while
+  # personalising nothing — the outcome the thesis must rule out. Ranking with the wrong
+  # persona costs 0.33 nDCG@5 under the val labels, so a persona-sensitive encoder has
+  # to degrade visibly here. Cheap: the corpus embedding is reused and only 276 queries
+  # are re-encoded. Compare with `benchmarks/compare_runs.py --swap`.
+  persona_swap: true
   eval_batch_size: 32    # corpus + val-query encoding only, and unrelated to batch_size:
                          # encode_texts is no-grad, so nothing is retained for backward and
                          # only the transient per-forward set exists. Runs on rank 0 once
