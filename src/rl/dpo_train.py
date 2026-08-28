@@ -27,11 +27,30 @@ logger = logging.getLogger(__name__)
 
 
 def load_pairs(path: str | Path) -> list[dict]:
-    """Load preference pairs from a JSONL file."""
+    """Load preference pairs from a JSONL file, refusing formats the trainer cannot use.
+
+    The version check is the guard against training on stem-only pairs: those rows carry a
+    bare question stem in ``query``, while the retriever this rewriter feeds was distilled
+    on the complete rendered question. Such pairs load and train without error, so nothing
+    but this check would reveal the mismatch.
+    """
+    from data.gen_dpo_data import DPO_OUTPUT_FORMAT_VERSION
+
     pairs = []
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            pairs.append(json.loads(line))
+    for line_number, line in enumerate(
+        Path(path).read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        version = record.get("format_version")
+        if version != DPO_OUTPUT_FORMAT_VERSION:
+            raise ValueError(
+                f"{path} line {line_number} has format version {version!r}, expected "
+                f"{DPO_OUTPUT_FORMAT_VERSION}; regenerate the pairs with "
+                "src/data/gen_dpo_data.py"
+            )
+        pairs.append(record)
     return pairs
 
 

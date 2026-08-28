@@ -271,18 +271,27 @@ The trained rewriter policy is built on top of the **fixed** ROPG-KD retriever.
 - **Policy** — Qwen3-4B with a LoRA adapter. A frozen copy is the DPO reference.
 - **Action** — emit a reformulated, persona-conditioned query.
 - **Preference-pair construction** — for each `(query, persona)` in the train split:
-  sample N=6 rewrites from the current policy at varying temperatures (0.3–1.3) to
+  sample N=3 rewrites from the current policy at temperatures 0.2 / 0.5 / 0.9 to
   ensure diversity → the labeling judge scores each rewrite *directly* on how well it
   would help retrieve the right study material for this learner (0–1 scale) →
   chosen = highest score, rejected = lowest. Cross-persona negatives are added for
   free: scholar's best rewrite becomes crammer's rejected (and vice versa), gated by
   a minimum score gap to keep the signal meaningful.
 
+  *Query parity with stage 1:* the rewriter is conditioned on the **complete rendered
+  question** — `data.questions.load_question`, the same function that produced the queries
+  in `data/ropg_kd/` — not on a bare stem. The rewrite this policy emits is consumed by
+  the stage-1 retriever, which was distilled on that form, so training the policy on stem
+  input would leave it optimising a query shape the pipeline never serves. The judge
+  additionally sees the question's gold answer and explanation as reference context, which
+  the rewriter never receives: without it the judge must guess what "the right study
+  material" is, and with it inside the query the answer would leak into retrieval.
+
   *Alternative considered:* end-to-end scoring — retrieve + generate through the
   fixed ROPG-KD retriever and frozen generator, then judge the final answer for
   persona fit + pedagogical quality + faithfulness. Rejected because it triples the
   API cost per (query, persona): N generation calls at 800 tokens each (≈ 1,800 extra
-  calls for ~100 questions × 3 personas × 6 rewrites) on a thesis budget with no
+  calls for ~100 questions × 3 personas × 3 rewrites) on a thesis budget with no
   batch discount. The proxy judge's predicted retrieval quality is a practical
   substitute: rewrite framing and vocabulary are the primary lever for which passage
   depth is retrieved, and the judge can evaluate this without running the full pipeline.
@@ -291,7 +300,9 @@ The trained rewriter policy is built on top of the **fixed** ROPG-KD retriever.
   Gemma-4-E4B model (via Unsloth, 4-bit quantised) to avoid API costs. Rewrite
   quality was insufficient — the quantised model produced repetitive or poorly
   personalised rewrites — so the rewriter was replaced with a remote Grok model
-  (`grok-4-1-fast`), which is a different model family from the judge. The judge
+  (`grok-4-1-fast`), which is a different model family from the judge. The labeling
+  judge is `gpt-5.6-luna` run with `reasoning_effort: none`, the same judge family used
+  for the ROPG-KD chunk scores, so both datasets carry comparable labels. The judge
   independence rule (judge that labels pairs ≠ judge that scores evaluation results)
   still holds; the rewriter is not a judge.
 - **Algorithm** — DPO over the LoRA adapter. Optional SFT warmup if DPO from the base

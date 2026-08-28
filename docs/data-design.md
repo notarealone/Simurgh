@@ -156,9 +156,17 @@ scored by the LLM teacher:
 `docs` contains the top-20 chunks retrieved by the baseline index, ordered by
 retrieval rank (not by teacher score — the model must learn the reordering).
 
+`query` is the complete rendered question, not the bare stem. Both this dataset and
+`data/dpo/` build it with `data.questions.load_question`, the single definition of that
+form: a `Passage:` section for grouped reading-comprehension items, then `Question:`,
+then `Options:` / `Pairs:` / `Items:` where the question has them. Gold `answer` and
+`explanation` are carried beside the query in `QuestionContext` and passed to the judge
+as reference context only — never folded into the query, which would leak the answer into
+the retriever's input.
+
 ### Generation procedure (`src/data/gen_ropg_data.py`)
 
-For each `(question_stem, persona_id)` in the split:
+For each `(question, persona_id)` in the split:
 
 1. Retrieve the top-20 chunks using the phase-1 dense index (Qwen3-Embedding,
    no instruction prefix — the baseline, not the fine-tuned model).
@@ -199,8 +207,10 @@ Each line is one preference pair conditioned on a persona:
 
 ```jsonl
 {
+  "format_version": 1,
+  "question_ref": "khordad1403-keshvari:q5",
   "persona_id": "crammer",
-  "query": "معنی بیت «پاک و بی‌عیب خدایی که به تقدیر عزیز» چیست؟",
+  "query": "Question:\nمعنی بیت «پاک و بی‌عیب خدایی که به تقدیر عزیز» چیست؟",
   "chosen": "معنی ساده بیت «پاک و بی‌عیب خدایی که به تقدیر عزیز» به زبان روزمره با مثال برای دانش‌آموز پایه نهم",
   "rejected": "تحلیل صور خیال و وزن عروضی در بیت «پاک و بی‌عیب خدایی که به تقدیر عزیز»"
 }
@@ -209,22 +219,46 @@ Each line is one preference pair conditioned on a persona:
 `chosen` is the rewrite the LLM judge rates as better at surfacing pedagogically
 useful material for this learner. `rejected` is worse.
 
+`query` is the **complete rendered question** produced by `data.questions.load_question`
+— the same function and therefore the same string form used to build `data/ropg_kd/`
+(`Passage:` / `Question:` / `Options:` / `Pairs:` / `Items:` sections). This matters
+because the rewriter's output is consumed by the retriever distilled on that form; a bare
+stem would train the rewriter on an input the pipeline never serves. `question_ref` is the
+`{exam_stem}:{qid}` line from the split file, so any row can be traced back to its source
+question.
+
+`format_version` is 1 for pairs built this way. `rl.dpo_train.load_pairs` refuses any
+other version, which is what stops the earlier stem-only pairs from being trained on
+silently — they load and train without error otherwise.
+
 ### Generation procedure (`src/data/gen_dpo_data.py`)
 
-For each `(question_stem, persona_id)` in the split:
+For each `(question, persona_id)` in the split:
 
-1. Generate N=6 candidate rewrites using `PromptedRewriter` backed by a remote Grok
-   model (`grok-4-1-fast`) at varying temperatures (0.3, 0.5, 0.7, 0.9, 1.1, 1.3)
-   to ensure diversity. Rewriter and judge calls within a question are parallelised
+1. Generate N=3 candidate rewrites using `PromptedRewriter` backed by a remote Grok
+   model (`grok-4-1-fast`) at temperatures 0.2, 0.5, 0.9 to ensure diversity.
+   Rewriter and judge calls within a question are parallelised
    (`ThreadPoolExecutor`, `max_workers=4`) to reduce wall-clock time.
-2. For each candidate call the LLM judge once with the prompt below. Collect one
-   score per candidate.
+2. For each candidate call the LLM judge (`gpt-5.6-luna` with `reasoning_effort: none`
+   and a 16-token completion budget — with reasoning enabled the budget is consumed by
+   reasoning tokens and the reply comes back empty) once with the prompt below. The judge
+   also receives the question's gold answer and explanation as reference context, so it
+   scores a rewrite against the material that actually resolves the question rather than
+   guessing at it. Those gold fields are judge-only: they never enter the rewriter's
+   prompt or the stored `query`, since a rewrite conditioned on the answer would leak it
+   into the retrieval query. Collect one score per candidate.
 3. Pair the highest-scored and lowest-scored candidates as `(chosen, rejected)`.
 4. **Cross-persona negatives**: within each question, the `chosen` rewrite for
    `scholar` becomes a `rejected` for `crammer` (and vice versa) without additional
    LLM calls. These cross-persona pairs are appended to the same output file.
 
-Config keys: `rewriter.model`, `rewriter.temperatures`, `rewriter.max_workers`.
+Rewrite and judge calls are retried with capped exponential backoff; a candidate whose
+retry budget is exhausted is dropped rather than scored 0.0, and a persona left with
+fewer than two surviving candidates is skipped — so no pair is ever written with
+`chosen == rejected`.
+
+Config keys: `rewriter.model`, `rewriter.temperatures`, `rewriter.max_workers`,
+`rewriter.max_attempts`, `judge.model`, `judge.reasoning_effort`, `judge.max_attempts`.
 
 *Approach choice:* Direct rewrite scoring was chosen over end-to-end scoring
 (retrieve → generate → judge the final answer) on cost grounds — end-to-end would
@@ -248,6 +282,13 @@ Profile: {persona_rendered}
 
 Original exam question: {original_query}
 
+Reference answer and rubric (judge context only; the rewriter never saw this):
+Gold answer/reference:
+{answer}
+
+Gold explanation/rubric:
+{explanation}
+
 Candidate rewrite: {rewrite}
 
 Rate 0.0–1.0 how well this rewrite would help retrieve the right study material
@@ -258,6 +299,9 @@ for this specific student. A good rewrite should:
 
 Respond with a single decimal number only, e.g. 0.61
 ```
+
+The reference block is omitted entirely when a question carries neither field (7 of 524
+have no gold answer, 509 have no explanation).
 
 ---
 

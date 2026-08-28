@@ -10,13 +10,13 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import yaml
 from tqdm import tqdm
 
+from data.questions import QuestionContext, load_question, render_question_value
 from data.settings import OPENAI_API_KEY, OPENAI_BASE_URL
 from personalization.profiles import render_profile, train_personas
 from rag.embedder import Qwen3Embedder
@@ -26,15 +26,6 @@ logger = logging.getLogger(__name__)
 
 SCORE_RE = re.compile(r"(?:0(?:\.\d+)?|1(?:\.0+)?)")
 QUESTION_OUTPUT_FORMAT_VERSION = 4
-
-
-@dataclass(frozen=True)
-class QuestionContext:
-    """Retrieval text and judge-only gold context for one extracted question."""
-
-    query: str
-    answer: object | None
-    explanation: str | None
 
 
 def _load_corpus(path: Path) -> tuple[list[str], list[str]]:
@@ -75,7 +66,7 @@ def _build_judge_messages(
     # Gold fields are passed separately to the judge and never become part of query.
     reference_sections: list[str] = []
     if answer is not None:
-        rendered_answer = answer if isinstance(answer, str) else _render_question_value(answer)
+        rendered_answer = answer if isinstance(answer, str) else render_question_value(answer)
         reference_sections.append(f"Gold answer/reference:\n{rendered_answer}")
     if explanation is not None:
         reference_sections.append(f"Gold explanation/rubric:\n{explanation}")
@@ -214,106 +205,6 @@ def _load_split_qids(split_path: Path) -> list[tuple[str, str, str]]:
         exam_stem, qid = line.split(":", 1)
         entries.append((exam_stem, qid, line))
     return entries
-
-
-def _render_question_value(value: object) -> str:
-    """Render an extracted value without changing string content."""
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)
-
-
-def _render_numbered_section(label: str, values: object) -> str | None:
-    if values is None:
-        return None
-    entries = values if isinstance(values, list) else [values]
-    if not entries:
-        return None
-    rendered = "\n".join(
-        f"{index}. {_render_question_value(value)}"
-        for index, value in enumerate(entries, start=1)
-    )
-    return f"{label}:\n{rendered}"
-
-
-def _load_question(
-    exam_stem: str, qid: str, questions_dir: Path
-) -> QuestionContext:
-    """Load and render the complete retrieval context for *qid*."""
-    qfile = questions_dir / f"{exam_stem}.json"
-    if not qfile.exists():
-        raise FileNotFoundError(f"Question file not found: {qfile}")
-    data = json.loads(qfile.read_text(encoding="utf-8"))
-    for q in data.get("questions", []):
-        if q["id"] == qid:
-            sections: list[str] = []
-            group_id = q.get("group_id")
-            if group_id is not None:
-                passages = data.get("passages", data.get("passage", []))
-                matching_passage: object | None = None
-
-                if isinstance(passages, dict):
-                    if passages.get("id") == group_id or passages.get("group_id") == group_id:
-                        matching_passage = passages
-                    else:
-                        matching_passage = passages.get(group_id)
-                        if matching_passage is None:
-                            matching_passage = passages.get(str(group_id))
-                elif isinstance(passages, list):
-                    for passage in passages:
-                        if not isinstance(passage, dict):
-                            continue
-                        if passage.get("id") == group_id or passage.get("group_id") == group_id:
-                            matching_passage = passage
-                            break
-
-                if matching_passage is None:
-                    raise KeyError(
-                        f"Question {qid!r} in {qfile} references group_id={group_id!r}, "
-                        "but no matching top-level passage exists"
-                    )
-                if isinstance(matching_passage, dict):
-                    passage_text = matching_passage.get(
-                        "text", matching_passage.get("passage")
-                    )
-                else:
-                    passage_text = matching_passage
-                if passage_text is None:
-                    raise KeyError(
-                        f"Question {qid!r} in {qfile} references group_id={group_id!r}, "
-                        "but the matching top-level passage has no text"
-                    )
-                sections.append(f"Passage:\n{_render_question_value(passage_text)}")
-
-            sections.append(f"Question:\n{_render_question_value(q['stem'])}")
-
-            options_section = _render_numbered_section("Options", q.get("options"))
-            if options_section is not None:
-                sections.append(options_section)
-
-            pairs = q.get("pairs")
-            if isinstance(pairs, dict):
-                for side in ("left", "right"):
-                    pair_section = _render_numbered_section(
-                        f"Pairs ({side})", pairs.get(side)
-                    )
-                    if pair_section is not None:
-                        sections.append(pair_section)
-            elif pairs is not None:
-                pair_section = _render_numbered_section("Pairs", pairs)
-                if pair_section is not None:
-                    sections.append(pair_section)
-
-            items_section = _render_numbered_section("Items", q.get("items"))
-            if items_section is not None:
-                sections.append(items_section)
-
-            return QuestionContext(
-                query="\n\n".join(sections),
-                answer=q.get("answer"),
-                explanation=q.get("explanation"),
-            )
-    raise KeyError(f"Question {qid!r} not found in {qfile}")
 
 
 def _retrieve_top_k(
@@ -460,7 +351,7 @@ def run(config_path: str | Path) -> None:
             valid_entries: list[tuple[str, str, str, QuestionContext]] = []
             for exam_stem, qid, raw_line in entries:
                 try:
-                    question = _load_question(exam_stem, qid, questions_dir)
+                    question = load_question(exam_stem, qid, questions_dir)
                     valid_entries.append((exam_stem, qid, raw_line, question))
                 except (FileNotFoundError, KeyError) as exc:
                     logger.warning("Skipping %s: %s", raw_line, exc)
