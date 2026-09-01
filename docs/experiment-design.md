@@ -67,10 +67,14 @@ sign-flip p-values, overall and per persona.
 
 ## Evaluation Protocol
 
-- [ ] Split by **source exam** (never by row), persona-balanced; personas = 3 train/val + 1 **test-holdout**
-- [ ] Separate **validation** (tune checkpoints/hyperparameters) from **test** (touched once, at the end)
-- [ ] **Freeze the test set, judge prompt, and seeds from day one and version them** — if any of these change between the Rung-0 and post-DPO runs, cross-time comparisons are invalid
-- [ ] Report tables + plots with confidence intervals; state significance per claim
+- [x] Current DPO/ROPG assets are split by question, not row: train and validation share
+  no `question_ref`. Six source families do cross splits, so report the limitation as
+  question-disjoint but source-overlapping.
+- [ ] Use validation only for within-arm checkpoint selection. Keep any later held-out
+  end-to-end test separate from the 272-prompt DPO validation tournament.
+- [ ] Freeze prompts, pair files, judge model, candidate generation settings, and seeds.
+  A hash mismatch invalidates comparison caches.
+- [ ] Report paired confidence intervals and Holm-corrected significance values.
 
 ## Ablation Studies
 
@@ -81,6 +85,73 @@ sign-flip p-values, overall and per persona.
 - [ ] Retriever: BM25 vs frozen Qwen3-Embedding-0.6B vs ROPG-KD (full retriever ladder)
 - [ ] On-policy vs off-policy DPO pairs (iterative-DPO study) — optional
 - [ ] Document findings in [results](results/)
+
+## Stage-2 DPO-family runs
+
+This experiment selects a rewriter before Rung 4. No retriever checkpoint, corpus, index,
+retrieval metric, or answer generator enters training or model comparison.
+
+All runs use Qwen3-4B in 4-bit, LoRA rank 16 on attention and MLP projections, one epoch,
+learning rate `1e-5`, target global batch 8, beta 0.1, and sequence caps
+576 prompt / 224 completion / 768 full. A 2x T4 launch uses per-device batch 1 and
+gradient accumulation 4. Native DDP changes throughput only.
+
+| Arm | TRL loss | Weighting | Label smoothing | RPO alpha | Purpose |
+|---|---|---:|---:|---:|---|
+| `dpo` | sigmoid | no | 0.0 | 1.0 | required baseline |
+| `wpo` | sigmoid | yes | 0.0 | 1.0 | address Grok-to-Qwen off-policy data |
+| `robust_dpo` | robust | no | 0.1 | 1.0 | test uniform preference-label noise |
+
+Each arm selects its own maximum `eval_rewards/accuracies` checkpoint. Objective losses are
+on different scales and never rank arms, and `eval_loss` no longer selects within an arm
+either: the robust objective is unbounded below and the WPO loss carries a policy-dependent
+weight, so a falling loss can mean a less confident policy rather than a better one.
+
+The epoch count, the selection metric, and the RPO supervised anchor all changed after the
+seed-42 screening run, which produced no arm better than the untrained policy. The evidence
+behind each change is in [dpo-arms-seed42-v1](results/dpo-arms-seed42-v1.md).
+
+`benchmarks/judge_agreement.py` measures whether Luna's pair labels predict the tournament
+judge's verdicts on a random sample of the pairs. If they do not, the training target and
+the evaluation target are different quantities and no arm can win.
+
+Cross-arm ranking uses a blind Gemini-family pairwise judge. The exact endpoint and model
+remain runtime values in `DPO_EVAL_BASE_URL`, `DPO_EVAL_API_KEY`, and `DPO_EVAL_MODEL`.
+The judge must differ from Luna, which labeled the pairs, and Grok, which generated the
+candidates.
+
+The judge does not share the rewriter's transport. Metis serves the Gemini family over
+Google's native GenAI protocol, so `DPO_EVAL_BASE_URL` is a bare host with no path
+(`https://api.metisai.ir`) and the calls go through `rag.llm.GeminiClient`, which posts to
+`{base_url}/v1beta/models/{model}:generateContent`. The OpenAI-compatible route that serves
+Luna and Grok has no Gemini models on it.
+
+Thinking cannot be switched off. Gemini 3.5 and newer reject the older `thinking_budget`
+field with a 400, and their `thinking_level` control has no *off* value, so the judge sets
+the lowest level the model accepts through `comparison.judge_thinking_level` (`minimal`,
+which is already the flash-lite default). Reasoning tokens are billed against the same
+`comparison.judge_max_tokens` budget as the reply, which is why that cap is 512 rather than
+the verdict's own size. The verdict shape is enforced server-side by a two-field response
+schema instead of by prompt wording alone. A judge response that is not a rate limit,
+timeout, or 5xx aborts the whole tournament instead of retrying: a wrong route, model name,
+or request field fails identically for every remaining call.
+
+Seed-42 screening covers all 272 validation question/persona prompts and five candidates:
+DPO, WPO, robust DPO, base Qwen3-4B, and temperature-zero prompted Grok. Ten model pairs
+produce 2,720 judge calls. Hidden A/B orientation is deterministic and balanced. Candidate
+scores use win 1, tie 0.5, loss 0. Reports include overall and per-persona results,
+5,000-sample paired bootstrap intervals, and sign-flip tests with Holm correction.
+
+Select WPO or robust DPO by round-robin score, then their direct head-to-head score, then
+WPO on an exact tie. Train standard DPO and the selected variant at seeds 43 and 44.
+Each added seed judges five fixed pairings on all prompts, 1,360 calls per seed. Total
+budget is 5,440 calls. Only the three-seed DPO-versus-variant comparison supports a thesis
+claim.
+
+If all trained arms lose to base Qwen or Grok, or validation loss improves while the
+independent ranking worsens, record failed transfer. That result opens a separate decision
+about Qwen on-policy candidates and persisted score/pair provenance. It does not trigger
+automatic regeneration.
 
 ## Stage-1 retriever runs (ROPG `hard_neg`)
 

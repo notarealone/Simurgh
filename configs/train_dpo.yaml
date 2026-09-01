@@ -1,0 +1,107 @@
+seed: 42
+
+data:
+  train_path: data/dpo/train.jsonl
+  val_path: data/dpo/val.jsonl
+  questions_dir: data/questions
+
+model:
+  name: Qwen/Qwen3-4B
+  load_in_4bit: true
+  max_seq_length: 768
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.0
+  bias: none
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+training:
+  run_root: data/rl/dpo_rewriter_runs
+  # The seed-42 screening run peaked on validation preference accuracy after one epoch in
+  # every arm and declined afterwards while batch accuracy climbed past 0.9.
+  epochs: 1
+  target_global_batch_size: 8
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  learning_rate: 1.0e-5
+  lr_scheduler_type: linear
+  warmup_ratio: 0.1
+  max_grad_norm: 1.0
+  optim: adamw_8bit
+  gradient_checkpointing: true
+  fp16: true
+  beta: 0.1
+  max_prompt_length: 576
+  max_completion_length: 224
+  max_length: 768
+  truncation_mode: keep_end
+  precompute_ref_log_probs: true
+  eval_strategy: epoch
+  save_strategy: epoch
+  save_total_limit: 3
+  load_best_model_at_end: true
+  # Not eval_loss: the robust objective is unbounded below and the WPO loss carries a
+  # policy-dependent weight, so lower loss can mean a less confident policy rather than a
+  # better one. Preference accuracy is bounded and comparable across epochs within an arm.
+  metric_for_best_model: eval_rewards/accuracies
+  greater_is_better: true
+  logging_steps: 10
+  report_to: none
+  ddp_find_unused_parameters: false
+
+# Fixed objective definitions. src/rl/dpo_train.py::resolve_arm rejects any edit here that
+# disagrees with its _ARM_CONTRACT. rpo_alpha adds a supervised NLL term on the chosen
+# rewrite, which counters the likelihood displacement that made every seed-42 arm push the
+# chosen log-probability down. TRL multiplies the anchor by the WPO weight in the wpo arm,
+# so the same alpha anchors that arm more weakly.
+arms:
+  dpo:
+    loss_type: sigmoid
+    use_weighting: false
+    label_smoothing: 0.0
+    rpo_alpha: 1.0
+  wpo:
+    loss_type: sigmoid
+    use_weighting: true
+    label_smoothing: 0.0
+    rpo_alpha: 1.0
+  robust_dpo:
+    loss_type: robust
+    use_weighting: false
+    label_smoothing: 0.1
+    rpo_alpha: 1.0
+
+generation:
+  max_new_tokens: 224
+  do_sample: false
+  batch_size: 4
+  grok_model: grok-4-1-fast
+  grok_temperature: 0.0
+  output_root: data/rl/dpo_rewriter_outputs
+
+comparison:
+  output_root: data/rl/dpo_rewriter_comparisons
+  screening_seed: 42
+  replication_seeds: [43, 44]
+  bootstrap_samples: 5000
+  max_workers: 4
+  # Thinking tokens are drawn from this same budget, and Gemini 3.x cannot switch thinking
+  # off, so this has to cover a minimal thought plus the JSON verdict.
+  judge_max_tokens: 512
+  # One of minimal, low, medium, high; empty lets the model pick its own default. Gemini
+  # 3.5 and newer reject the older thinking_budget field, so this is the only control.
+  judge_thinking_level: minimal
+  retry:
+    max_attempts: 3
+    initial_backoff_seconds: 1.0
+    backoff_multiplier: 2.0
+    max_backoff_seconds: 8.0

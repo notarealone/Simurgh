@@ -154,8 +154,7 @@ def run(config: dict) -> None:
         len(done),
     )
 
-    # Import the rewrite prompt builder from the rewriter module.
-    from rag.rewriter import _build_rewrite_prompt
+    from rag.rewriter import build_rewrite_messages
 
     with output_path.open("a", encoding="utf-8") as out_f:
         for q in questions:
@@ -169,7 +168,7 @@ def run(config: dict) -> None:
                 # 1. Sample N rewrites.
                 rewrites: list[str] = []
                 for _ in range(n_rewrites):
-                    msgs = _build_rewrite_prompt(profile_rendered, q["stem"])
+                    msgs = build_rewrite_messages(profile_rendered, q["stem"])
                     try:
                         rw = rewriter_llm.chat(msgs).strip()
                         if rw:

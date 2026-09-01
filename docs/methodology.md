@@ -27,9 +27,9 @@ learner profile ─┐
   and the raw query and emits a reformulated, persona-conditioned query.
 - **Retriever** — trained with ROPG-KD (Qwen3-Embedding-0.6B dense encoder, fine-tuned). An LLM judge
   scores each `(query, persona, document)` triple offline; those scores are distilled into
-  the encoder so it ranks documents by persona-utility, not generic relevance. Trained
-  before the rewriter (retriever is fixed when DPO pairs are built). Retrieval quality
-  is reported **per persona** (Recall@K, MRR) as a diagnostic (see [experiment-design](experiment-design.md)).
+  the encoder so it ranks documents by persona utility. Retriever training and evaluation
+  are separate from Stage 2. The DPO trainer never loads a retriever, index, corpus, or
+  retrieval metric. Component integration belongs to the later Rung 4 experiment.
 - **Generator** — frozen, a light-but-big API model. Whether it *also* receives the profile
   is an **experimental axis**: a persona-*aware* generator personalizes the explanation
   directly; a persona-*blind* generator isolates the rewriter as the sole personalizer.
@@ -65,9 +65,9 @@ validated on Persian first, then fine-tuned with ROPG-KD.
 
 ## RL Formulation
 
-Two components are trained, in order: the retriever (ROPG-KD) and then the query
-rewriter (DPO). Fixing the retriever before building DPO pairs ensures preference
-labels do not shift under the rewriter during training.
+Two components are trained in separate stages: the retriever with ROPG-KD and the query
+rewriter with DPO-family objectives. Neither stage loads or differentiates through the
+other. The later Rung 4 experiment combines their selected checkpoints.
 
 ### Stage 1 — Retriever: ROPG-KD
 
@@ -264,51 +264,73 @@ Reported honestly: as of this revision, **stage 1 has no result that beats the u
 encoder**, and the success criterion for the runs above is beating nDCG@5 0.548 — not
 beating the earlier trained checkpoints.
 
-### Stage 2 — Rewriter: DPO
+### Stage 2 — Rewriter preference optimization
 
-The trained rewriter policy is built on top of the **fixed** ROPG-KD retriever.
+Stage 2 trains and evaluates the query rewriter alone. It does not backpropagate through,
+load, or select against a retriever. This keeps the preference experiment attributable to
+the rewriter. Rung 4 later combines the selected rewriter with a separately selected
+retriever.
 
-- **Policy** — Qwen3-4B with a LoRA adapter. A frozen copy is the DPO reference.
-- **Action** — emit a reformulated, persona-conditioned query.
-- **Preference-pair construction** — for each `(query, persona)` in the train split:
-  sample N=3 rewrites from the current policy at temperatures 0.2 / 0.5 / 0.9 to
-  ensure diversity → the labeling judge scores each rewrite *directly* on how well it
-  would help retrieve the right study material for this learner (0–1 scale) →
-  chosen = highest score, rejected = lowest. Cross-persona negatives are added for
-  free: scholar's best rewrite becomes crammer's rejected (and vice versa), gated by
-  a minimum score gap to keep the signal meaningful.
+- **Policy and reference** — Qwen3-4B loaded in 4-bit with a LoRA adapter on all attention
+  and MLP projections. TRL receives `ref_model=None` only after PEFT wraps the model, so
+  the reference is the same frozen Qwen weights with the adapter disabled.
+- **Action** — emit one persona-conditioned rewrite from the learner profile and complete
+  rendered question. Training and inference use the same Qwen chat template with
+  `enable_thinking=False`.
+- **Frozen data** — 1,739 training pairs over 432 questions and 351 validation pairs over
+  92 questions. The splits have no shared `question_ref`. Candidate rewrites came from
+  `grok-4-1-fast`, while the trained/reference policy is Qwen3-4B, so the data is
+  off-policy. Luna (`gpt-5.6-luna`) labeled the candidates using the gold answer and
+  explanation as judge-only context.
+- **Missing provenance** — pair rows store no judge scores or pair type. The trainer
+  therefore does not infer confidence, score margin, or cross-persona provenance from row
+  order. Regeneration is a later decision only if corrected training fails independent
+  evaluation.
+- **Objectives** — three fixed arms share all optimizer and batch settings, and each adds
+  TRL's RPO supervised NLL term on the chosen rewrite at `rpo_alpha: 1.0`:
+  - `dpo`: sigmoid DPO;
+  - `wpo`: sigmoid DPO with policy-probability weighting, which directly tests the known
+    Grok-to-Qwen distribution gap;
+  - `robust_dpo`: robust DPO with label smoothing 0.1, which tests uniform label noise.
 
-  *Query parity with stage 1:* the rewriter is conditioned on the **complete rendered
-  question** — `data.questions.load_question`, the same function that produced the queries
-  in `data/ropg_kd/` — not on a bare stem. The rewrite this policy emits is consumed by
-  the stage-1 retriever, which was distilled on that form, so training the policy on stem
-  input would leave it optimising a query shape the pipeline never serves. The judge
-  additionally sees the question's gold answer and explanation as reference context, which
-  the rewriter never receives: without it the judge must guess what "the right study
-  material" is, and with it inside the query the answer would leak into retrieval.
-
-  *Alternative considered:* end-to-end scoring — retrieve + generate through the
-  fixed ROPG-KD retriever and frozen generator, then judge the final answer for
-  persona fit + pedagogical quality + faithfulness. Rejected because it triples the
-  API cost per (query, persona): N generation calls at 800 tokens each (≈ 1,800 extra
-  calls for ~100 questions × 3 personas × 3 rewrites) on a thesis budget with no
-  batch discount. The proxy judge's predicted retrieval quality is a practical
-  substitute: rewrite framing and vocabulary are the primary lever for which passage
-  depth is retrieved, and the judge can evaluate this without running the full pipeline.
-
-  *Rewriter model note:* The initial implementation generated rewrites with a local
-  Gemma-4-E4B model (via Unsloth, 4-bit quantised) to avoid API costs. Rewrite
-  quality was insufficient — the quantised model produced repetitive or poorly
-  personalised rewrites — so the rewriter was replaced with a remote Grok model
-  (`grok-4-1-fast`), which is a different model family from the judge. The labeling
-  judge is `gpt-5.6-luna` run with `reasoning_effort: none`, the same judge family used
-  for the ROPG-KD chunk scores, so both datasets carry comparable labels. The judge
-  independence rule (judge that labels pairs ≠ judge that scores evaluation results)
-  still holds; the rewriter is not a judge.
-- **Algorithm** — DPO over the LoRA adapter. Optional SFT warmup if DPO from the base
-  policy proves unstable.
-- **Judge independence:** the judge that labels DPO pairs must differ in family from the
-  judge that scores evaluation results.
+  The anchor exists because the seed-42 screening run grew every arm's margin by pushing
+  both log-probabilities down rather than by making the chosen rewrite more likely, and
+  judged quality fell in proportion to that displacement
+  ([results](results/dpo-arms-seed42-v1.md)). TRL applies the anchor before the WPO weight,
+  so the same alpha anchors the `wpo` arm roughly nine times more weakly on this data.
+- **Sequence contract** — prompt cap 576, completion cap 224 including EOS, and full cap
+  768. Preflight tokenizes every row with the production template and refuses to train if
+  any row would truncate.
+- **Optimization** — one epoch, learning rate `1e-5`, target global batch 8, fp16,
+  8-bit AdamW, linear schedule, gradient checkpointing, and precomputed reference log
+  probabilities. On 2x T4, each process uses per-device batch 1 and accumulation 4.
+  Native TRL/Accelerate DDP replicates one QLoRA model per GPU. DDP changes wall time, not
+  model quality.
+- **Execution** — `notebooks/train_dpo.ipynb`, generated by `notebooks/build_train_dpo.py`,
+  runs unattended top to bottom: preflight and the two-step DDP smoke once on the first
+  arm, then all three arms in sequence, then generation, then the tournament. Each stage
+  records its own outcome, so one failed arm neither aborts the arms that finished nor
+  discards their artifacts, and the tournament runs only once every arm has a promoted
+  adapter. `run_status.json` in the run root reports what actually completed.
+- **Checkpoint selection** — each arm restores its own highest `eval_rewards/accuracies`
+  checkpoint. Validation loss selects nothing: the robust objective is unbounded below, and
+  the WPO loss is scaled by a policy-dependent weight whose shrinkage tracks falling policy
+  log-probabilities, so it fell monotonically while preference accuracy also fell. Loss
+  scales also differ across the three objectives, so validation loss never ranks arms.
+- **Cross-arm ranking** — an independent Gemini-family judge sees the learner profile,
+  complete question, judge-only gold context, and two anonymous rewrites. Seed 42 compares
+  DPO, WPO, robust DPO, base Qwen3-4B, and temperature-zero prompted Grok on all 272 unique
+  validation `(question_ref, persona_id)` prompts. That is 10 pairs and 2,720 calls.
+  Stable hidden A/B orientation is balanced per model pair. Reports include win/tie/loss
+  rates, round-robin score, persona slices, 5,000-sample paired bootstrap intervals, and
+  Holm-corrected sign-flip tests.
+- **Seed protocol** — screen all three arms at seed 42, select WPO or robust DPO by
+  round-robin score, then direct head-to-head, then WPO on an exact tie. Train standard DPO
+  and that variant at seeds 43 and 44. The added seeds judge five fixed pairings each,
+  1,360 calls per seed and 5,440 calls total. Seed-42 screening alone is not a result.
+- **Failure rule** — if every trained arm loses to base Qwen or Grok, or lower validation
+  loss accompanies worse independent-judge ranking, report failed transfer. Do not
+  regenerate data automatically.
 
 ## Personalization Module
 
@@ -328,17 +350,30 @@ options in [things-to-consider](things-to-consider.md)).
 - [ ] KD-train the Qwen3-Embedding-0.6B LoRA adapter; select checkpoint on val Recall@K per persona
 - [ ] Freeze the ROPG-KD retriever checkpoint before Stage 2
 
-**Stage 2 — DPO rewriter**
+**Stage 2 — DPO-family rewriter**
 
-- [ ] Smoke-test Qwen3-4B Persian output (5–10 sample rewrites)
-- [ ] Build the persona-conditioned preference dataset from the **train split only** ([question-extraction](question-extraction.md) questions × personas; pairs labeled by the Stage 2 judge)
-- [ ] DPO-train the rewriter LoRA against a frozen reference; low LR, 1–3 epochs
-- [ ] Select checkpoints on **validation** persona-fit (not train loss); watch for length/repetition hacking and policy degeneration
-- [ ] Log seed, config, and model + index versions per run (reproducible by construction)
+- [x] Freeze and validate `data/dpo/{train,val}.jsonl`; require explicit validation data,
+  question-disjoint splits, known personas, unequal completions, and no duplicates.
+- [x] Run exact-tokenizer preflight. Every prompt, completion, and full sequence must fit
+  576 / 224 / 768 tokens without trainer truncation.
+- [x] Run two optimizer steps for `dpo`, `wpo`, and `robust_dpo` on 2x T4.
+- [x] Screen all three seed-42 arms and judge them. Outcome: no arm beat the untrained
+  policy ([results](results/dpo-arms-seed42-v1.md)).
+- [ ] Measure Luna/Gemini label agreement with `benchmarks/judge_agreement.py`. A near-chance
+  result means the training and evaluation targets differ and the arms cannot be fixed by
+  tuning.
+- [ ] Retrain all three seed-42 arms for one epoch with the RPO anchor and promote each arm's
+  maximum `eval_rewards/accuracies` checkpoint.
+- [ ] Generate 272 greedy rewrites per local candidate and cache 272 temperature-zero Grok
+  rewrites.
+- [ ] Run the 2,720-call Gemini screening tournament, then train and judge DPO plus the
+  selected variant at seeds 43 and 44.
+- [ ] Report the three-seed paired comparison. Keep retriever and Rung 4 results out of this
+  stage.
 
-Hardware: ROPG-KD trains on one GPU and scales to several via DDP, launched with
-`torchrun` (2x T4 on Kaggle). A small model + LoRA fits Kaggle / limited university
-GPUs; the generator and judges are API calls.
+Hardware: both stages launch with `torchrun`. Stage 2 targets 2x T4 and derives gradient
+accumulation from world size to keep global batch 8. The generator and judges remain API
+calls; the DPO training loop makes none.
 
 ## Inference
 

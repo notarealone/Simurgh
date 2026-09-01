@@ -89,12 +89,16 @@ def build_pipeline(step_cfg: dict, eval_cfg: dict, seed: int) -> PersonaRAG:
         },
     }
     if step_cfg.get("rewriter_type") == "dpo":
-        config["rewriter"]["type"] = "dpo"
-        config["rewriter"]["model"] = step_cfg.get("dpo_model", "Qwen/Qwen3-4B")
-        config["rewriter"]["adapter_path"] = step_cfg.get("dpo_adapter_path")
-        config["rewriter"]["device"] = "cuda"
-        config["rewriter"]["max_new_tokens"] = 200
-    return PersonaRAG(config)
+        config["rewriter"].update(
+            {
+                "type": "dpo",
+                "model": step_cfg.get("dpo_model", "Qwen/Qwen3-4B"),
+                "adapter_path": step_cfg.get("dpo_adapter_path"),
+                "device": "cuda",
+                "max_seq_length": step_cfg.get("dpo_max_seq_length", 768),
+                "generation": {"max_new_tokens": 224, "do_sample": False},
+            }
+        )
 
 
 def run_eval(eval_config_path: str) -> None:

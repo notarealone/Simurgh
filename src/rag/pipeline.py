@@ -147,7 +147,8 @@ class PersonaRAG(DenseRAG):
                     model_name=rewriter_cfg.get("model", "Qwen/Qwen3-4B"),
                     adapter_path=rewriter_cfg.get("adapter_path"),
                     device=rewriter_cfg.get("device", "cuda"),
-                    max_new_tokens=rewriter_cfg.get("max_new_tokens", 200),
+                    max_seq_length=rewriter_cfg.get("max_seq_length", 768),
+                    generation=rewriter_cfg.get("generation"),
                 )
             else:
                 rw_llm_cfg = rewriter_cfg.get("llm", config["llm"])

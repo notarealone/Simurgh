@@ -34,7 +34,8 @@ steps:
     embedder_adapter_path: data/rl/ropg_kd_checkpoints/best
     rewriter_type: dpo
     dpo_model: Qwen/Qwen3-4B
-    dpo_adapter_path: data/rl/dpo_rewriter_checkpoints/dpo_best
+    dpo_adapter_path: data/rl/dpo_rewriter_runs/dpo/seed-42/dpo_best
+    dpo_max_seq_length: 768
     generator_model: gpt-5-nano
     index_path: data/index/phase3.faiss
     meta_path: data/index/phase3_meta.json

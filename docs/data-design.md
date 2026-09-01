@@ -231,6 +231,21 @@ question.
 other version, which is what stops the earlier stem-only pairs from being trained on
 silently — they load and train without error otherwise.
 
+The frozen files contain 1,739 training rows over 432 questions and 351 validation rows
+over 92 questions. Validation has 272 unique `(question_ref, persona_id)` keys. The files
+contain no empty completion, identical chosen/rejected pair, exact duplicate row, or
+train/validation question overlap.
+
+Rows do not store judge scores, score margins, candidate temperature, source persona, or
+pair type. Training cannot reconstruct confidence or distinguish within-persona from
+cross-persona pairs. In particular, row order is not provenance. The corrected trainer
+uses every row as one binary preference and records this limitation in each run manifest.
+Data regeneration is gated on the result of corrected training and independent judging.
+
+The candidates are off-policy for Qwen3-4B: Grok generated them, Luna ranked them, and
+Qwen is the policy/reference family. Standard DPO is the baseline. WPO tests weighting
+for this distribution gap, while robust DPO tests uniform label noise.
+
 ### Generation procedure (`src/data/gen_dpo_data.py`)
 
 For each `(question, persona_id)` in the split:
@@ -307,17 +322,18 @@ have no gold answer, 509 have no explanation).
 
 ## 7. Split Strategy
 
-Splits are assigned at the **question level** with a deterministic random shuffle
-(default seed 42, ratios 70/15/15 train/val/test). All questions from all seven source
-files — six real exam files and the LLM-generated set — are pooled and shuffled
-together, then partitioned. This ensures the synthetic questions are distributed across
-all splits and that no single exam dominates any one split.
+The current files use a deterministic **question-level** random split with seed 42 and
+70/15/15 train/validation/test ratios. No `question_ref` crosses train and validation,
+which prevents leakage from the multiple persona and pair rows attached to one question.
 
-An optional `--fixed-exam-splits` mode pins the six real exam files to their
-historically designated splits (table below) and only randomizes the remaining files
-(currently `ai_generated_questions.json`). This is useful for reproducing the original
-per-exam assignment if needed, but the default question-level shuffle is the canonical
-split for all training runs.
+This split is not source-exam-disjoint. Questions from all seven source files were pooled
+before shuffling, and six source families occur in both train and validation. Results must
+therefore be described as question-disjoint but source-overlapping. Existing DPO and
+ROPG assets stay frozen for this experiment; this pass does not re-split them.
+
+An optional `--fixed-exam-splits` mode pins the six real exam files to their historical
+splits and randomizes only remaining files. It can reproduce the original per-exam
+assignment, but it does not describe the frozen files used by the current runs.
 
 | Split | Fixed exam files (`--fixed-exam-splits` only) | Personas |
 |---|---|---|

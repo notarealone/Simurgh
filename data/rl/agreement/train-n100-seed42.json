@@ -1,0 +1,47 @@
+{
+  "agree": 64,
+  "agreement_ci95": [
+    0.5881422410187721,
+    0.7732726881025974
+  ],
+  "agreement_decisive": 0.6881720430107527,
+  "agreement_p_vs_chance": 0.00036579567696276875,
+  "decisive": 93,
+  "disagree": 29,
+  "errors": {},
+  "inputs": {
+    "judge_model": "gemini-3.7-flash",
+    "judge_thinking_level": "low",
+    "pairs_path": "data/dpo/train.jsonl",
+    "sample_size": 100,
+    "seed": 42
+  },
+  "judged": 100,
+  "missing": 0,
+  "per_persona": {
+    "crammer": {
+      "agree": 27,
+      "agreement_decisive": 0.9310344827586207,
+      "disagree": 2,
+      "tie": 5
+    },
+    "scholar": {
+      "agree": 18,
+      "agreement_decisive": 0.5806451612903226,
+      "disagree": 13,
+      "tie": 1
+    },
+    "steady": {
+      "agree": 19,
+      "agreement_decisive": 0.5757575757575758,
+      "disagree": 14,
+      "tie": 1
+    }
+  },
+  "picked_a": 50,
+  "picked_b": 43,
+  "position_bias_p": 0.5340598617346067,
+  "sample": 100,
+  "tie": 7,
+  "tie_rate": 0.07
+}
