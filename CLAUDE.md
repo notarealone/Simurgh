@@ -78,7 +78,7 @@ This is a thesis, not a product. The goal is a *defensible research claim*, so p
 
 ### Domain conventions (RAG / RL / personalization)
 
-- **No leakage.** Split train/val/test by *source question/document*, not by row — the same passage or question must not appear across splits. Keep persona distribution balanced across splits.
+- **No leakage.** The rule is that no question or passage may cross splits. The frozen assets currently use a question-level split (seed 42, 70/15/15, pooled across all seven sources): `question_ref` is disjoint, but source files overlap across splits. The splitter does not enforce shared-passage (`group_id`) isolation. Any re-split must be a separate, explicitly versioned change because DPO and ROPG assets are frozen against these files.
 - **Evaluate retrieval before generation.** Measure Recall@K / MRR per persona on the retriever in isolation; an end-to-end gain on top of broken retrieval means nothing. Log retrieval hits so failures trace to retrieval vs. generation.
 - **Version the index.** Chunking, embedding model, and top-K are config, not constants; rebuild and version the index whenever embeddings change.
 - **Profile is the contract.** Define the user-profile schema once (grade level, learning style, goal) and thread it through rewriting → retrieval → generation. Every personalized component must be switchable back to "no profile."

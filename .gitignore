@@ -248,3 +248,6 @@ Thumbs.db
 # Manually added
 .claude
 .idea
+
+*.docx
+*.doc

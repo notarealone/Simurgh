@@ -7,7 +7,7 @@
 ## Datasets
 
 - **Domain** — 9th-grade Persian (فارسی نهم). Corpus: official textbook + gifted-schools edition + study guide (provenance in [data-extraction](data-extraction.md)).
-- **Questions** — extracted from real exam papers into structured JSON (schema + provenance in [question-extraction](question-extraction.md)); ~618 questions across 7 sources: 6 real exam papers + `ai_generated_questions.json` (LLM-generated, curriculum-grounded, added to improve data quantity and lesson coverage).
+- **Questions** — extracted from real exam papers into structured JSON (schema + provenance in [question-extraction](question-extraction.md)); ~618 questions across 7 sources: 131 real exam questions plus 487 AI-generated (78.8% of the pool, present in all three splits). See [question-extraction](question-extraction.md), "AI-generated questions".
 - **Profiles** — synthetic learner personas (LLM-as-simulator; no real student data). A fixed set of 4 over 4 axes (comprehension, prior knowledge, learning goal, explanation style); 3 train + 1 test-holdout. Full schema in [personas](personas.md).
 - **Grounding** — link each question to its answering corpus passage(s): gold passages for Recall@K and context for generation. Tag each question **grounded vs skill** and by **personalization headroom** — pure recall/grammar items carry little persona-fit signal; comprehension items carry the most.
 
@@ -15,9 +15,11 @@ Data is scarce, which constrains eval diversity and DPO volume. Mitigations to d
 pursue as needed (not core scope yet):
 
 - [ ] Scrape more exam papers (real questions + gold answers via the [question-extraction](question-extraction.md) VLM pipeline) — highest ROI
-- [x] Synthesize corpus-grounded questions — done: `data/questions/ai_generated_questions.json`
-      (LLM-generated, 9th-grade Persian curriculum; enters the question-level split pool
+- [x] Synthesize exam-seeded questions — done: `data/questions/ai_generated_questions.json`
+      (imitation of real exam items via GLM 5.2; enters the question-level split pool
       alongside real exam files)
+- [ ] Synthesize genuinely corpus-grounded questions — keep this separate from the
+      exam-seeded artifact if the distinction is needed later.
 - [ ] Persona-multiply for eval coverage; sample multiple DPO pairs per (question, persona)
 
 ## Baselines
@@ -153,7 +155,7 @@ independent ranking worsens, record failed transfer. That result opens a separat
 about Qwen on-policy candidates and persisted score/pair provenance. It does not trigger
 automatic regeneration.
 
-## Stage-1 retriever runs (ROPG `hard_neg`)
+## Stage-1 retriever runs (ROPG `hard_neg`, Luna-era labels)
 
 Four runs isolate each stage-1 change against the untrained encoder. Pairwise attribution
 uses A vs B for anchoring, B vs C for filtering, and C vs D for `doc_frozen`. All share
@@ -162,10 +164,10 @@ uses A vs B for anchoring, B vs C for filtering, and C vs D for `doc_frozen`. Al
 
 | Run | `data.train_data` | `anchor.mode` | Isolates | Status |
 |---|---|---|---|---|
-| A | `data/ropg_kd` | `none` | plain MNRL at the corrected LR/epoch budget — the control | running |
-| B | `data/ropg_kd` | `both` | base-model anchoring | **done** — see [results](results/stage1-ropg-runB.md) |
-| C | `data/ropg_kd_filtered` | `both` | label filtering | next |
-| D | `data/ropg_kd_filtered` | `doc_frozen` | the asymmetric (frozen document tower) arm | not run |
+| A | `data/ropg_kd` | `none` | plain MNRL at the corrected LR/epoch budget — the control | **done** — best epoch 2; `models/ropg/ropg_kd_runA_model/` |
+| B | `data/ropg_kd` | `both` | base-model anchoring | **done** — best epoch 1; `models/ropg/ropg_kd_runB_model/` |
+| C | `data/ropg_kd_filtered` | `both` | label filtering | **done** — best epoch 1; `models/ropg/ropg_kd_runC_model/` |
+| D | `data/ropg_kd_filtered` | `doc_frozen` | the asymmetric (frozen document tower) arm | **done** — best epoch 1; `models/ropg/ropg_kd_runD_model/` |
 
 Both data directories are derived from the *same* judged `{train,val}.jsonl` and differ
 only in whether the label filters ran — `configs/datagen_ropg.yaml` builds the
@@ -177,8 +179,10 @@ after-the-fact check that the intended arm actually ran — `data.train_data` is
 from the notebook's config-drift check, because local and Kaggle roots legitimately
 differ.
 
-**Run order/status is B completed, A is running, and C follows.** A need not finish before
-preparing C, but both are required for attribution.
+**Run order/status: all four runs are complete.** Best epochs are A 2, B 1, C 1, and D 1.
+Adapters and logs are under `models/ropg/ropg_kd_run{A,B,C,D}_model/`; pairwise and
+persona-swap reports are under `models/ropg/comparisons/`. See
+[ropg-runs-comparison-v1](results/ropg-runs-comparison-v1.md) for the completed set.
 
 **The arms are paired-comparable.** `src/rl/ropg_kd.py` loads its eval groups from
 `{train_data}/val.jsonl` — the *scored* file, which `derive_triplets` never rewrites —
@@ -190,26 +194,24 @@ must not be compared across arms (`compare_runs.py` flags this).
 rank-13-through-rank-20 negative selection, despite the historical `hard_neg` name.
 Changing that selection only for C would confound the B-vs-C comparison.
 
-### Primary metric — revised after run B (2026-08-20)
+### Primary metric — revised after run B (2026-08-20; Luna-era labels)
 
-**Headline pair: nDCG@1 and Recall@5**, both against the untrained
-Qwen3-Embedding-0.6B baseline (nDCG@1 0.543, Recall@5 0.3961) — *not* against the
-earlier trained checkpoints, none of which cleared it. Report the epoch-0 row in every
-table.
+**Headline pair: nDCG@1 and Recall@5**, both against the Luna-era untrained
+Qwen3-Embedding-0.6B baseline (nDCG@1 0.5895, Recall@5 0.5640) — not against the
+earlier trained checkpoints. Report the epoch-0 row in every table.
 
-The original criterion was nDCG@5 > 0.548 alone. Run B forced a revision, and the
-reason is recorded here rather than in a footnote because changing a success criterion
+The original criterion was nDCG@5 > 0.548 **on the nano-era labels**. Run B forced a revision,
+and the reason is recorded here rather than in a footnote because changing a success criterion
 after seeing a result is exactly the move that needs justifying:
 
-- **nDCG@5 is over half noise at this label quality.** Val mean teacher score by rank
-  runs 0.757 / 0.569 / 0.447 / 0.372 / 0.323, so the adjacent gaps at slots 3→4 and 4→5
-  are 0.075 and 0.049 — at or below the single-label noise floor established in
-  [methodology](methodology.md). **53.4% of ideal DCG@5's mass sits in slots 2–5.**
-  The MNRL objective trains only the rank-1-vs-tail contrast, where the gap is 0.711.
-  Grading a rank-1 objective mostly by slots 2–5 measures the labels' noise, not the
+- **nDCG@5 is over half noise at this label quality.** Under the Luna-era labels, val mean
+  teacher score by rank runs 0.799 / 0.372 / 0.176 / 0.108 / 0.072, so the adjacent gaps at
+  slots 3→4 and 4→5 are 0.068 and 0.036. **33.2% of ideal DCG@5's mass sits in slots 2–5.**
+  The nano-era MNRL objective trains only the rank-1-vs-tail contrast, where the historical gap
+  was 0.711. Grading a rank-1 objective mostly by slots 2–5 measures the labels' noise, not the
   encoder.
-- **nDCG@1 grades the one slot where the teacher is reliable** — rank-1 mean 0.757,
-  0.188 clear of rank 2 — and shares nDCG's ceiling of 1.0, so it is directly readable.
+- **nDCG@1 grades the one slot where the teacher is most separated** — the Luna-era rank-1
+  mean is 0.799, **0.427 clear of rank 2**, so it is directly readable.
 - **Recall@5 is already what the code selects on.** `is_better` in `src/rl/ropg_kd.py`
   ranks checkpoints by overall Recall@K and always has; the previous text calling nDCG
   "primary" contradicted the implementation, and that contradiction had already chosen
@@ -223,27 +225,31 @@ is for.
 **`judged@5` is a required diagnostic column.** It is the fraction of the returned top-5
 that the teacher actually judged. Only a group's ~20 judged chunks carry gain, out of a
 171-chunk corpus, so a model that surfaces *unjudged but relevant* chunks is punished by
-nDCG for improving. Recall@5 up with nDCG@5 down is consistent both with "the graded
-middle got worse" and with "the retrieved set moved outside the judged pool";
-`judged@5` is the only thing that separates them. Never report nDCG without it.
+nDCG for improving. The Luna-era epoch-0 baseline has `judged@5 = 1.0` by construction:
+the candidate pool was mined with the base encoder, so trained runs necessarily give some
+of that coverage back when they move outside the pool. Recall@5 up with nDCG@5 down is
+consistent both with "the graded middle got worse" and with "the retrieved set moved outside
+the judged pool"; `judged@5` is the only thing that separates them. Never report nDCG without it.
 
 **`persona_swap` is a required control.** Personas reach the retriever only through the
 `Instruct:` prefix, so an encoder that ignores that prefix improves every headline
 metric while personalising nothing. Each epoch re-scores every val query under a rotated
 persona; the matched-minus-swapped delta is the personalisation signal in isolation.
-Ranking with the wrong persona costs 0.33 nDCG@5 under the val labels, so a
-persona-sensitive encoder must degrade visibly. A null result here means the Stage-1
-gain is generic retrieval quality and the personalisation claim rests entirely on
-Stage 2.
+Under the Luna-era labels, ranking with the wrong persona costs 0.1363 nDCG@5. All four
+executed runs returned a null swap effect (A/B/C/D: −0.0017 / −0.0043 / −0.0053 / +0.0008,
+all p = 1.0000), so the Stage-1 gain is generic retrieval quality and the personalisation
+claim rests entirely on Stage 2.
 
-**Ceiling, for calibration.** Computed from the val teacher scores with no model
-involved: a perfect *persona-blind* ranker reaches nDCG@5 0.878; a perfect
-persona-matched one reaches 1.000. The 0.122 between them is the entire personalisation
-headroom at Stage 1, and it is small next to the 0.356 of generic-retrieval headroom
-still open below 0.878.
-- Filter thresholds for C and D: `min_positive_margin: 0.05`, `min_positive_score: 0.4`,
-  `min_negative_margin: 0.25`. Record retained/total from `{split}_triplets_meta.json`
-  alongside each result: train `929/1296`, val `206/276`.
+**Ceiling, for calibration.** Computed from the Luna-era val teacher scores with no model
+involved: a perfect *persona-blind* ranker reaches nDCG@5 0.9573; a perfect
+persona-matched one reaches 1.0000. The 0.0427 between them is the entire personalisation
+headroom at Stage 1, and the generic-retrieval headroom below 0.9573 is 0.9573 − 0.5861 =
+0.3712 from the Luna-era baseline.
+- Filter thresholds for C and D: the live `configs/datagen_ropg_filtered.yaml` values are
+  `min_positive_margin: 0.05`, `min_positive_score: 0.4`, and `min_negative_margin: 0.25`
+  (`filters.enabled: true`), matching `{split}_triplets_meta.json`. The unfiltered
+  `configs/datagen_ropg.yaml` carries `0.08 / 0.4 / 0.3` with filters disabled. Record
+  retained/total alongside each result: train `929/1296`, val `206/276`.
 - **D changes the serving contract.** `doc_frozen` trains the query tower against a
   document tower with the adapter off, so its index must be built the same way. Do not
   compare D against A–D's numbers without confirming the eval encoded the corpus

@@ -147,19 +147,19 @@ Headline takeaways (from the paper, not derived here):
 
 ## How our implementation diverges (and what that cost)
 
-Simurgh's stage-1 retriever extends ROPG-KD. Recording the deltas here because one of
-them turned out to be the reason the arm did not work; see
-[methodology](../methodology.md), "Why `reader_kd` was retired as the primary arm".
+Simurgh's stage-1 retriever extends ROPG-KD. The table below records the **nano-era
+(`data/ropg_kd/old_v2/`, pre-`ff90cf6`)** comparison; current Luna-era results are in
+[methodology](../methodology.md), "Label eras".
 
 | | Salemi et al. | Simurgh |
 |---|---|---|
 | Teacher signal | `Eval(y, M(φp(x,[d])))` — measured reader outcome vs. ground-truth `y` | subjective LLM-judge usefulness rating |
-| Teacher determinism | deterministic under greedy decoding; reliability 1.0 | single sample at `temperature: 1.0`; single-label reliability ≈ 0.17 |
-| Judge/reader model | FlanT5-XXL (11B), frozen | `gpt-5.4-nano` |
+| Teacher determinism | deterministic under greedy decoding; reliability 1.0 | single sample at `temperature: 1.0`; single-label reliability ≈ 0.17 (nano-era) |
+| Judge/reader model | FlanT5-XXL (11B), frozen | `gpt-5.4-nano` (nano-era labels) |
 | Source of personalization | **per-user corpus** (55–205 personal docs each) | one 171-chunk corpus shared by all personas; reordering only |
 | Retriever | Contriever (110M), **full fine-tune** | Qwen3-Embedding-0.6B + LoRA (r=8) |
 | Optimizer | lr 1e-5, 10 epochs, batch 64 | lr 5e-5, 3 epochs, batch 2 × world size |
-| Training data | 5k–20k examples per task | 1296 groups (431 questions × 3 personas) |
+| Training data | 5k–20k examples per task | 1296 groups (432 questions × 3 personas; nano-era labels) |
 | Candidate pool | top-`l`=16 profile docs | top-20 corpus chunks |
 
 Three of these matter more than the rest.

@@ -1,8 +1,8 @@
 # Teaching According to Students' Aptitude: Personalized Mathematics Tutoring via Persona-, Memory-, and Forgetting-Aware LLMs
 
 - **Authors:** Yang Wu, Rujing Yao, Tong Zhang, Yufei Shi, Zhuoren Jiang, Zhushan Li, Xiaozhong Liu
-- **Year:** 2025
-- **Venue:** AAAI 2026 Workshop (arXiv:2511.15163)
+- **Year:** 2026
+- **Venue:** AAAI 2026 Workshop
 - **Link:** https://arxiv.org/abs/2511.15163
 
 ---

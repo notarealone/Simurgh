@@ -11,6 +11,9 @@ Run D is the weakest arm. Freezing the document tower reduced graded ranking qua
 ## Experiment inputs
 
 The analysis uses each run's `training_log.json` under `models/ropg/`:
+The labels are the current Luna era: `gpt-5.6-luna` judged `data/ropg_kd/*.jsonl`, with
+`format_version: 4`, generated in commit `ff90cf6`. See [methodology](../methodology.md),
+"Label eras — nano (retired) vs Luna (current)".
 
 | Run | Training data | Anchor mode | Best epoch |
 |---|---|---|---:|
@@ -27,21 +30,27 @@ All runs use seed 42, `hard_neg` triplets, three epochs, learning rate $5\times1
 
 Higher is better for every retrieval metric. `judged@5` is a coverage diagnostic rather than a direct quality score.
 
-| Metric | Run A | Run B | Run C | Run D | Best |
-|---|---:|---:|---:|---:|---|
-| nDCG@1 | 0.7183 | 0.7122 | **0.7216** | 0.6746 | C |
-| nDCG@2 | 0.7113 | 0.7022 | **0.7229** | 0.6599 | C |
-| nDCG@3 | 0.7141 | 0.7103 | **0.7174** | 0.6715 | C |
-| nDCG@4 | 0.7211 | 0.7211 | **0.7283** | 0.6757 | C |
-| nDCG@5 | 0.7214 | **0.7307** | 0.7302 | 0.6872 | B |
-| Hit@1 | 0.7681 | 0.7754 | **0.7826** | 0.7391 | C |
-| Hit@2 | 0.8587 | 0.8659 | **0.8877** | 0.8551 | C |
-| Hit@3 | 0.8949 | **0.9130** | **0.9130** | 0.9022 | B and C |
-| Hit@4 | 0.9239 | **0.9565** | **0.9565** | 0.9312 | B and C |
-| Hit@5 | 0.9493 | **0.9710** | 0.9601 | 0.9493 | B |
-| Recall@5 | 0.5845 | **0.6461** | 0.6123 | 0.5761 | B |
-| MRR | 0.8434 | 0.8538 | **0.8596** | 0.8298 | C |
-| judged@5 | 0.7210 | **0.8688** | 0.8551 | 0.7775 | B |
+| Metric | Baseline (epoch 0) | Run A | Run B | Run C | Run D | Best |
+|---|---:|---:|---:|---:|---:|---|
+| nDCG@1 | 0.5895 | 0.7183 | 0.7122 | **0.7216** | 0.6746 | C |
+| nDCG@2 | 0.5445 | 0.7113 | 0.7022 | **0.7229** | 0.6599 | C |
+| nDCG@3 | 0.5596 | 0.7141 | 0.7103 | **0.7174** | 0.6715 | C |
+| nDCG@4 | 0.5727 | 0.7211 | 0.7211 | **0.7283** | 0.6757 | C |
+| nDCG@5 | 0.5861 | 0.7214 | **0.7307** | 0.7302 | 0.6872 | B |
+| Hit@1 | 0.6920 | 0.7681 | 0.7754 | **0.7826** | 0.7391 | C |
+| Hit@2 | 0.7645 | 0.8587 | 0.8659 | **0.8877** | 0.8551 | C |
+| Hit@3 | 0.8623 | 0.8949 | **0.9130** | **0.9130** | 0.9022 | B and C |
+| Hit@4 | 0.9058 | 0.9239 | **0.9565** | **0.9565** | 0.9312 | B and C |
+| Hit@5 | 0.9275 | 0.9493 | **0.9710** | 0.9601 | 0.9493 | B |
+| Recall@5 | 0.5640 | 0.5845 | **0.6461** | 0.6123 | 0.5761 | B |
+| MRR | 0.7853 | 0.8434 | 0.8538 | **0.8596** | 0.8298 | C |
+| judged@5 | 1.0000 | 0.7210 | **0.8688** | 0.8551 | 0.7775 | B |
+Run B minus the Luna-era epoch-0 baseline, in table order: nDCG@1–5
++0.1227 / +0.1578 / +0.1507 / +0.1484 / +0.1446; Hit@1–5
++0.0833 / +0.1014 / +0.0507 / +0.0507 / +0.0435; Recall@5 +0.0821;
+MRR +0.0685; judged@5 −0.1312. `judged@5` starts at 1.0 by construction because
+the candidate pool was mined with the base encoder, so its decline is expected and
+is not a regression.
 
 ## Metric definitions
 

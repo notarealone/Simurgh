@@ -1,4 +1,9 @@
-# Stage 1, run B — anchored `hard_neg` (filters off)
+# Stage 1, run B (nano-era labels) — anchored `hard_neg` (filters off)
+> **Nano-era report.** This run trained on the retired `gpt-5.4-nano` labels, now archived at
+> `data/ropg_kd/old_v2/`; its baseline row is the nano-era baseline. The run B reported by the
+> thesis is the post-`ff90cf6` retrain in [ropg-runs-comparison-v1](ropg-runs-comparison-v1.md)
+> (best epoch 1, nDCG@5 0.7307, Recall@5 0.6461). Numbers from these two files must never be
+> mixed.
 
 **Config:** `configs/train_ropg.yaml` at `mode: hard_neg`, `format: triplets`,
 `lr: 5.0e-5`, `epochs: 3`, `max_negatives: 8`, `anchor.mode: both`
@@ -8,10 +13,11 @@
 group. **Eval:** 276 val groups (92 per persona) ranked against the full 171-chunk
 corpus.
 
-Row B of the A–D table in [experiment-design](../experiment-design.md). Runs A, C and D
-had not been run when this was written, so **nothing here is yet attributable to
-anchoring specifically** — run B differs from the earlier failed `hard_neg` arm in four
-ways at once (lr 2e-4 → 5e-5, epochs 5 → 3, negatives 4 → 8, anchoring off → on).
+Row B of the A–D table in [experiment-design](../experiment-design.md). **Writing-time state
+(2026-08-20):** runs A, C and D had not been run when this was written, so **nothing here was
+yet attributable to anchoring specifically** — run B differed from the earlier failed `hard_neg`
+arm in four ways at once (lr 2e-4 → 5e-5, epochs 5 → 3, negatives 4 → 8, anchoring off → on).
+The completed A–D set is in [ropg-runs-comparison-v1](ropg-runs-comparison-v1.md).
 
 ## Result
 
@@ -49,7 +55,7 @@ right, and epoch 2 is the checkpoint.
 
 ## Reading
 
-**This run did not meet its stated success criterion.** That criterion was
+**This run did not meet its stated success criterion.** That criterion was the nano-era
 `nDCG@5 > 0.548`, and nDCG@5 fell to 0.522. Five of six metrics improved and one fell,
 and the one that fell was the one being scored on. Recording that plainly is the point
 of this file.
@@ -79,18 +85,22 @@ was not available for this run.
 
 ## Significance
 
-**Not yet computed.** Run `benchmarks/compare_runs.py` on this run's downloaded
-`training_log.json` and paste the table here:
+The shipped significance numbers were produced by `benchmarks/compare_runs.py` over the
+`models/ropg/ropg_kd_run*_model/*/training_log.json` files. Its outputs are committed in
+`models/ropg/comparisons/`.
+
+For example, the run-A-vs-run-B comparison used:
 
 ```bash
-uv run python benchmarks/compare_runs.py runB_training_log.json \
-    --out docs/results/stage1-ropg-runB-significance.md
+uv run python benchmarks/compare_runs.py \
+    models/ropg/ropg_kd_runA_model/*/training_log.json \
+    models/ropg/ropg_kd_runB_model/*/training_log.json \
+    --out models/ropg/comparisons/runA_vs_runB.md
 ```
 
-Until then no delta above is claimable. With *n* = 92 per persona and SE ≈ 0.027 on
-nDCG@5, the per-persona differences in the table are close to one standard error; the
-overall deltas (*n* = 276) are the ones most likely to survive, and the paired test is
-what decides.
+The same command produced the other pairwise reports and, with `--swap`, the
+persona-swap reports. This nano-era report's figures remain separate from those
+completed Luna-era comparisons.
 
 ## What this changed
 

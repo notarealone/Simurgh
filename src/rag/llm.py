@@ -14,12 +14,17 @@ class OpenAICompatClient:
         temperature: float = 0.2,
         max_tokens: int = 800,
         reasoning_effort: str | None = None,
+        response_format: dict | None = None,
     ) -> None:
         self.client = openai.OpenAI(base_url=base_url, api_key=api_key)
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.reasoning_effort = reasoning_effort
+        #: Optional OpenAI ``response_format`` (e.g. a strict ``json_schema``). When set,
+        #: the server constrains decoding to the schema, so the reply parses without
+        #: prompt-level pleading for "JSON only".
+        self.response_format = response_format
 
     def chat(self, messages: list[dict[str, str]]) -> str:
         """Send *messages* and return the assistant reply text."""
@@ -31,6 +36,8 @@ class OpenAICompatClient:
         }
         if self.reasoning_effort is not None:
             request["reasoning_effort"] = self.reasoning_effort
+        if self.response_format is not None:
+            request["response_format"] = self.response_format
 
         response = self.client.chat.completions.create(**request)
         return response.choices[0].message.content or ""

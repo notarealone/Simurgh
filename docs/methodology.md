@@ -121,6 +121,7 @@ DPO-only compute constraint.
   over the 20 candidates is near-uniform on *both* sides and the KD gradient is close to
   noise. Both values still need the ablation in [experiment-design](experiment-design.md)
   to confirm; they are a reasoned default, not a measured optimum.
+- **Temperature scope:** `student_temp` and `teacher_temp` feed `kd_loss` only. They are inert under the primary `hard_neg` (MNRL) arm; their ablation concerns only the retained `reader_kd` ablation.
 - **Guard:** report Recall@K/MRR per persona on the val set throughout training to
   catch reward hacking (an encoder that scores well on the judge rubric but retrieves
   nothing useful).
@@ -128,35 +129,38 @@ DPO-only compute constraint.
   - **nDCG@1–K** grades each judged doc by its raw teacher score (linear gain;
     scores already lie in [0,1], so exponential gain would only compress them). No cutoff
     is drawn, and the ceiling is 1.0 at every K. This is the honest reading of a graded
-    judge: measured on `val.jsonl`, mean teacher score by rank runs
-    0.757 / 0.569 / 0.447 / 0.372 / 0.323, so a binary top-3 set counts the 1st and 3rd
-    doc identically despite a ~1.7× difference in judged utility — and the rank-3 vs
-    rank-4 gap is **under 0.05 in 53% of groups**, meaning the boundary mostly separates
-    near-ties. **The same graded reading cuts the other way deeper in the list**, which is
-    why the headline metric is nDCG@**1**, not nDCG@K: adjacent teacher gaps at slots
-    3→4 and 4→5 are only 0.075 and 0.049, at the label noise floor, and 53.4% of ideal
-    DCG@5's mass sits in slots 2–5. See [experiment-design](experiment-design.md),
+    judge: measured on the Luna-era `val.jsonl`, mean teacher score by rank runs
+    0.799 / 0.372 / 0.176 / 0.108 / 0.072, so a binary top-3 set counts the 1st and 3rd
+    doc identically despite a ~4.5× difference in judged utility (rank 1 / rank 3 =
+    0.799 / 0.176 ≈ 4.5×) — and the rank-3 vs rank-4 gap is **under 0.05 in 61.6% of
+    groups**, meaning the boundary mostly separates near-ties. **The same graded reading
+    cuts the other way deeper in the list**, which is why the headline metric is nDCG@**1**,
+    not nDCG@K: the rank-1 mean is 0.799, **0.427 clear of rank 2**, while adjacent teacher
+    gaps at slots 3→4 and 4→5 are only 0.068 and 0.036, at the label noise floor, and
+    33.2% of ideal DCG@5's mass sits in slots 2–5. See [experiment-design](experiment-design.md),
     "Primary metric — revised after run B".
   - **judged@K (diagnostic)** — the share of the returned top-K the teacher ever scored.
     Only ~20 of 171 corpus chunks are judged per group, so a model that surfaces
     unjudged-but-relevant chunks is penalised by nDCG for improving. Recall up with nDCG
     down fits both "the graded middle got worse" and "the ranking left the judged pool";
-    this is what separates them.
+    this is what separates them. The untrained baseline's `judged@5 = 1.0` is structural:
+    the 20-document candidate pool was mined with the base encoder, so trained runs
+    necessarily give some of that coverage back when they move outside the pool.
   - **persona-swap (control)** — every val query re-scored under a rotated persona
     against the same corpus embedding. Personas reach the retriever only through the
     `Instruct:` prefix, so an encoder that ignores it improves every headline metric
-    while personalising nothing. Ranking with the wrong persona costs 0.33 nDCG@5 under
-    the val labels, so a persona-sensitive encoder has to degrade here.
+    while personalising nothing. Ranking with the wrong persona costs 0.1363 nDCG@5 under
+    the Luna-era val labels, so a persona-sensitive encoder has to degrade here.
   - **Recall@K / Hit@K / MRR** keep the binary set: the group's **top-3 docs by teacher
     score within the judged top-20 candidates**. Retained deliberately — nDCG ranges over
     the same graded distribution the KD loss is trained on, so a coarser, differently
     shaped metric belongs beside it as the reward-hacking guard. Note Recall@k divides by
     that set's size, so Recall@1 could never exceed 1/3; it is reported at K only.
   - *Alternatives considered:* a score threshold (e.g. ≥ 0.7) — semantically closer to
-    "relevant", but measured on `val.jsonl` it leaves **79/276 groups with no relevant doc
-    at all** (125/276 at 0.8), and such groups are skipped entirely, so any usable
-    threshold silently discards 17–45% of the val set; and strict top-1 — simpler, but
-    brittle under exactly the near-ties quantified above.
+    "relevant", but measured on the Luna-era `val.jsonl` it leaves **58/276 groups with no
+    relevant doc at all** (63/276 at 0.8), and such groups are skipped entirely, so any
+    usable threshold silently discards 21–23% of the val set; and strict top-1 — simpler,
+    but brittle under exactly the near-ties quantified above.
 - **Significance:** per-query metric vectors are persisted to `training_log.json` each
   epoch so any two epochs can be compared with a **paired** bootstrap. This matters: with
   ~276 val queries a single epoch's marginal 95% CI is ≈ ±0.04, wide enough that two means
@@ -174,7 +178,8 @@ DPO-only compute constraint.
   which surfaces cases where the retriever found plausible-but-wrong documents.
 
 
-#### Why `reader_kd` was retired as the primary arm
+#### Why `reader_kd` was retired as the primary arm — nano-era labels
+**Nano-era evidence (`old_v2` labels, pre-`ff90cf6`).** The table below is retained as history; it must not be mixed with the current Luna-era run results.
 
 Both arms were trained to completion on 2×T4. **Neither beat the untrained
 Qwen3-Embedding-0.6B baseline on nDCG@5**, at the time the sole primary metric (run B
@@ -191,6 +196,7 @@ for these two runs, so the comparison cannot be completed retrospectively:
 | `reader_kd`, best epoch (2/3) | 0.459 | 0.768 | 0.387 | 0.620 |
 | `hard_neg`, best epoch (1/4) | 0.509 | 0.779 | **0.402** | **0.633** |
 
+The objective conclusion still holds under the Luna labels: MNRL reads the rank-1-vs-tail contrast, while KD softmaxes the noisy graded middle; the Luna rank-1 gap is even wider.
 `hard_neg` epoch 1 dominates `reader_kd` epoch 2 on every metric, and is the only
 trained checkpoint anywhere that exceeds the baseline on anything (Recall@5 +0.006,
 MRR +0.031 — both inside noise). The two arms' **val losses are not comparable**:
@@ -202,26 +208,27 @@ ranking the retrieval metrics give.
 `Eval(y, M(φp(x,[d])))`: the frozen reader is run with only document *d* in context and
 its output is scored against the **ground-truth label `y`**. Under greedy decoding that
 is deterministic — re-run it and the number is identical, reliability 1.0. Our
-`gen_ropg_data.py` substituted a subjective usefulness rating from `gpt-5.4-nano`,
-sampled **once at `temperature: 1.0`**. There is no reader in the loop at all; the mode
-name is aspirational. Measured on `train.jsonl` (1296 groups, 431 questions × 3 personas,
-171-chunk corpus):
+`gen_ropg_data.py` substituted a subjective usefulness rating from `gpt-5.4-nano`
+in the nano-era labels and sampled **once at `temperature: 1.0`**. There is no reader in the loop at all; the mode
+name is aspirational. Measured on the nano-era `data/ropg_kd/old_v2/train.jsonl` (1296 groups,
+432 questions × 3 personas, 171-chunk corpus):
+The current teacher is `gpt-5.6-luna`, but its per-label reliability has not been re-measured. The Luna score distribution is much sparser: 68.9% of val document scores are exact zero across 20 documents per group. Therefore, the reliability and histogram values below describe the nano-era `old_v2` labels only.
 
 | Evidence | Value | Reading |
 |---|---|---|
 | split-half *r*, per-chunk mean teacher score (~10 queries/half) | 0.674 | single-label reliability ≈ **0.17** |
 | split-half *r*, per-chunk (crammer − scholar) contrast | 0.420 | persona signal is real but faint |
 | variance that is within-cell (across personas, same query+chunk) | 23.7% | most score variance is noise, not persona |
-| train groups dropped by margin < 0.05 | 258/1296 | the first sequential filter removes ambiguous positives |
-| train groups dropped by best score < 0.4 after the margin filter | another 109 | the second filter removes groups with no useful positive |
-| train groups retained after both filters | **929/1296** | the current filtered build |
-| validation groups retained after both filters | **206/276** | the current filtered build |
+| train groups dropped by margin < 0.05 | 258/1296 | the first sequential filter in the Luna-era filtered build removes ambiguous positives |
+| train groups dropped by best score < 0.4 after the margin filter | another 109 | the second filter in the Luna-era build removes groups with no useful positive |
+| train groups retained after both filters | **929/1296** | the current Luna-era filtered build |
+| validation groups retained after both filters | **206/276** | the current Luna-era filtered build |
 | historical mean positive − negative gap (rank-1 vs ranks 17–20) | **0.711** (sd 0.183) | the historical extremes are far above the noise floor |
 | mean adjacent-rank gap, middle of the list | **0.02–0.03** | the graded middle is below it |
 
-Roughly 83% of every individual `teacher_score` is noise. The score histogram also
-shows the quantization this predicts, with mass piling on 0.05 / 0.12 / 0.15 / 0.18 /
-0.62 / 0.78 / 0.85.
+For these nano-era labels, roughly 83% of every individual `teacher_score` is noise. The score
+histogram also shows the quantization this predicts, with mass piling on 0.05 / 0.12 / 0.15 /
+0.18 / 0.62 / 0.78 / 0.85; these histogram values describe `data/ropg_kd/old_v2/` only.
 
 **Why that is fatal to KD but survivable for MNRL.** The last two rows are the whole
 argument. `kd_loss` softmaxes the *entire* graded ranking, so most of its gradient is
@@ -245,10 +252,11 @@ The principled fix, and the adaptation it requires, is recorded in
 **What this stage now does about it.** Three changes, each switchable so its contribution
 is separable (see [experiment-design](experiment-design.md) for the run table):
 
-1. **Label filters** (`configs/datagen_ropg.yaml` → `triplets.filters`, default off).
-   At the current thresholds, `min_positive_margin: 0.05` drops 258/1296 train groups;
-   `min_positive_score: 0.4` drops another 109 after that, leaving 929/1296. Validation
-   retains 206/276 groups.
+1. **Label filters** (`configs/datagen_ropg_filtered.yaml` → `filters`, enabled).
+   The live thresholds are `min_positive_margin: 0.05`, `min_positive_score: 0.4`, and
+   `min_negative_margin: 0.25`; they match `data/ropg_kd_filtered/train_triplets_meta.json`.
+   The unfiltered `configs/datagen_ropg.yaml` carries `0.08 / 0.4 / 0.3` with filters disabled.
+   At the live thresholds, 929/1296 train groups and 206/276 validation groups are retained.
 2. **Base-model anchoring** (`configs/train_ropg.yaml` → `anchor`). Every trained
    checkpoint scoring *below* an untrained baseline while train loss collapses to 0.058
    is the signature of destructive drift, not of underfitting, so the adapter is
@@ -260,9 +268,34 @@ is separable (see [experiment-design](experiment-design.md) for the run table):
 3. **Overfitting budget.** `lr` 2e-4 → 5e-5 and `epochs` → 3, since `hard_neg`'s best
    epoch was its first.
 
-Reported honestly: as of this revision, **stage 1 has no result that beats the untrained
-encoder**, and the success criterion for the runs above is beating nDCG@5 0.548 — not
-beating the earlier trained checkpoints.
+Reported honestly: under the Luna labels all four runs clear the untrained baseline. Run B is
+the selected checkpoint at nDCG@5 0.7307 / Recall@5 0.6461 / MRR 0.8538 against the Luna-era
+baseline 0.5861 / 0.5640 / 0.7853 (+0.1446 / +0.0821 / +0.0685), with `judged@5` falling
+1.0000 → 0.8688. The old success criterion, "beat nDCG@5 0.548", was a nano-era criterion
+and is not what the current runs were scored against. The persona-swap control returned null
+for all four runs (see [ropg-runs-comparison-v1](results/ropg-runs-comparison-v1.md)), so Stage 1
+demonstrates generic retrieval improvement but not demonstrated persona use.
+
+#### Label eras — nano (retired) vs Luna (current)
+
+Stage-1 labels exist in two eras. The retired **nano era** was judged by `gpt-5.4-nano` and is archived at `data/ropg_kd/old_v2/`. The current **Luna era** is judged by `gpt-5.6-luna` and lives at `data/ropg_kd/`. Commit `ff90cf6` (2026-08-28) switched the pipeline from nano to Luna; `format_version: 4` marks Luna rows.
+
+Commit `ff90cf6` had to regenerate the scored files anyway: the same commit replaced stem-only queries with the complete rendered question and added bounded judge retries with whole-group skips, which invalidated every previously judged row. The teacher was upgraded `gpt-5.4-nano` → `gpt-5.6-luna` inside that already-required pass, so the upgrade cost **zero extra passes**. Per-call cost stays small by construction: the teacher emits a single decimal, capped at `judge.max_completion_tokens: 16` with `reasoning_effort: none`, so no reasoning tokens are billed — 31,440 calls of ≤16 completion tokens each. The nano labels' measured single-label reliability ≈ 0.17 was the motivation.
+
+| Statistic | Nano era (`old_v2`) | Luna era (current) |
+|---|---:|---:|
+| Mean teacher score, ranks 1–5 | 0.757 / 0.569 / 0.447 / 0.372 / 0.323 | 0.799 / 0.372 / 0.176 / 0.108 / 0.072 |
+| Adjacent gaps, ranks 1→2 / 2→3 / 3→4 / 4→5 | not recorded / not recorded / 0.075 / 0.049 | 0.427 / 0.196 / 0.068 / 0.036 |
+| Rank-3 vs rank-4 gap under 0.05 | 53.3% of groups | 61.6% of groups |
+| Ideal DCG@5 mass in slots 2–5 | 53.4% | 33.2% |
+| Groups with no doc ≥ 0.7 (≥ 0.8) | 79/276 (125/276) | 58/276 (63/276) |
+| Persona-blind ceiling | 0.8781 | 0.9573 |
+| Persona-matched ceiling | not separately recorded | 1.0000 |
+| Personalisation headroom | 0.122 | 0.0427 |
+| Cost of ranking with a rotated persona | 0.3369 nDCG@5 | 0.1363 nDCG@5 |
+| Untrained baseline | nDCG@1 0.543; nDCG@5 0.548; Recall@5 0.3961; MRR 0.602; Hit@5 0.786 | nDCG@1 0.5895; nDCG@2 0.5445; nDCG@3 0.5596; nDCG@4 0.5727; nDCG@5 0.5861; Hit@1–5 0.6920 / 0.7645 / 0.8623 / 0.9058 / 0.9275; Recall@5 0.5640; MRR 0.7853; judged@5 1.0000 |
+
+Every Stage-1 number in any document must name its label era. Only Luna-era numbers may be compared with results under `models/ropg/*`.
 
 ### Stage 2 — Rewriter preference optimization
 
@@ -277,15 +310,45 @@ retriever.
 - **Action** — emit one persona-conditioned rewrite from the learner profile and complete
   rendered question. Training and inference use the same Qwen chat template with
   `enable_thinking=False`.
-- **Frozen data** — 1,739 training pairs over 432 questions and 351 validation pairs over
-  92 questions. The splits have no shared `question_ref`. Candidate rewrites came from
-  `grok-4-1-fast`, while the trained/reference policy is Qwen3-4B, so the data is
-  off-policy. Luna (`gpt-5.6-luna`) labeled the candidates using the gold answer and
-  explanation as judge-only context.
-- **Missing provenance** — pair rows store no judge scores or pair type. The trainer
-  therefore does not infer confidence, score margin, or cross-persona provenance from row
-  order. Regeneration is a later decision only if corrected training fails independent
-  evaluation.
+- **Data eras** — Stage-2 pair files exist in two formats, and every Stage-2 number must
+  name which one it was measured on.
+
+  *Format 1 (scalar era, retired).* 1,739 training pairs over 432 questions and 351
+  validation pairs over 92 questions, no shared `question_ref`. Candidates from
+  `grok-4-1-fast`; labels from Luna as a single bare decimal at `temperature: 1.0` with a
+  16-token budget, using the gold answer and explanation as judge-only context. `chosen` =
+  best of 3, `rejected` = worst of 3, no margin filter. Rows stored no scores or pair type,
+  so the trainer could not infer confidence, margin, or cross-persona provenance, and row
+  order is not provenance. The 92 validation questions × 3 personas give 276 possible keys
+  but only 272 carry a pair — 4 keys had fewer than two scored candidates — and
+  `benchmarks/compare_dpo_rewriters.py:156-198` asserts exactly 272. All results in
+  [dpo-arms-seed42-v1](results/dpo-arms-seed42-v1.md) are format-1 numbers.
+
+  *Format 2 (rubric era, current).* 4 candidates per persona at temperatures
+  0.2/0.5/0.8/1.1. Luna scores a three-criterion rubric — `meaning_preservation` 0.40,
+  `persona_fit` 0.35, `specificity` 0.25 — at `temperature: 0` under a strict
+  `json_schema` response format, replacing the single scalar, and **three samples per
+  candidate** are averaged because that judge is not deterministic at `temperature: 0`
+  ([judge-noise-luna-v1](results/judge-noise-luna-v1.md)). Pairs must clear
+  `min_chosen_score: 0.55`, `min_margin: 0.04` — calibrated against measured judge noise,
+  not guessed — and a near-duplicate check; cross-persona negatives are re-scored under
+  the target persona so both sides of the comparison share one rubric context. Rows carry
+  `pair_type`, both scores, the margin, both sub-score dicts, both temperatures, and
+  `rejected_persona_id`; every candidate is dumped separately with its scores, so filters
+  can be retuned without regenerating. The shipped files are the fourth data generation
+  (2,658 train / 534 val over the same 432 / 92 questions) under the second schema:
+  audit in [dpo-data-v4-audit](results/dpo-data-v4-audit.md), which reports 0.08% modeled
+  label error, a measured persona-discrimination effect of 0.180, and a `scholar`
+  negative-side skew of 1.6× that per-persona eval reporting must not pool away.
+  Regenerating the pair files changes the 272 constant above. The data remains off-policy:
+  Grok generates, Luna ranks, Qwen3-4B is the policy. Full recipe in
+  [data-design](data-design.md).
+
+  The format-1 → format-2 change was triggered by the pre-registered failed-transfer rule
+  in [experiment-design](experiment-design.md): the seed-42 screening found no arm
+  distinguishable from the untrained base, which opens the decision on candidate sourcing
+  and persisted provenance. `rl.dpo_train.load_pairs` refuses format 1, so the two eras
+  cannot be mixed by accident.
 - **Objectives** — three fixed arms share all optimizer and batch settings, and each adds
   TRL's RPO supervised NLL term on the chosen rewrite at `rpo_alpha: 1.0`:
   - `dpo`: sigmoid DPO;

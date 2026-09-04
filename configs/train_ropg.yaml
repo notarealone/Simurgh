@@ -39,8 +39,8 @@ training:
   # token per layer in fp16); with it only each block's input is stored, ~2.5 GB. There is
   # no batch_size/doc_micro_batch pair that fits without it. Cost is one extra forward.
   gradient_checkpointing: true
-  # hard_neg's best epoch was 1 of 4: train loss fell 0.649 -> 0.058 while val retrieval
-  # dropped monotonically after epoch 1. This is an overfitting budget, not a compute one.
+  # Executed Luna-era runs selected best epoch 1 for B/C/D and 2 for A, out of 3. The
+  # three-epoch budget captures overfitting without adding an unnecessary compute budget.
   epochs: 3
   batch_size: 2          # groups per optimizer step; effective batch = this x world_size.
                          # The knob for *retained* activation memory: one graph is held

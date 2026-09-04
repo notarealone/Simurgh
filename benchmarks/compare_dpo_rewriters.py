@@ -48,8 +48,8 @@ _JUDGE_SYSTEM = (
     '{"winner":"B","reason":"short reason"}, or '
     '{"winner":"TIE","reason":"short reason"}.'
 )
-# Structured output pins the reply shape server-side, so `_parse_judgment` never has to
-# recover a verdict from prose or fenced markdown.
+# Structured output pins the reply shape server-side; `_parse_judgment` still strips fenced
+# markdown as defence-in-depth for endpoints that return a wrapper despite the schema.
 _JUDGE_SCHEMA = {
     "type": "OBJECT",
     "properties": {

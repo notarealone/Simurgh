@@ -304,7 +304,9 @@ def run(config_path: str | Path) -> None:
 
         entries = _load_split_qids(split_path)
 
-        # Build resume set from existing output
+        # Build the resume set from existing output. This skips records from previous
+        # runs; `seen` is not updated after writes, so duplicate qid lines in one pass
+        # are not deduplicated.
         seen: set[tuple[str, str]] = set()
         if output_path.exists():
             for line_number, raw in enumerate(
@@ -450,10 +452,11 @@ def derive_triplets(
       {stem}_triplets.jsonl — one line per group: {query, persona_id, positive, negatives:[...]}
       {stem}_pairs.jsonl    — one line per (pos, neg) pair: {query, persona_id, positive, negative}
 
-    Negatives are written **hardest-first** (descending teacher_score), which matters
-    because ``TripletDataset`` truncates with ``negatives[:max_negatives]``: a file
-    holding more negatives than training requests must hand over the hardest ones,
-    not the easiest.
+    Negatives are the weakest tail of the judged top-20 list (ranks 13–20 at the
+    current settings), deliberately not the hardest ones: ``sorted_docs[1:][-max_negatives:]``.
+    This selection is frozen for Runs A–C; see the rank-13-through-rank-20 note in
+    ``docs/methodology.md``. The harder ``sorted_docs[1:1 + max_negatives]`` alternative
+    is recorded as an open item in ``docs/things-to-consider.md``.
 
     *filters* drops groups whose supervision is noise rather than signal — an arbitrary
     positive, or a group where the judge found nothing useful at all. It defaults to

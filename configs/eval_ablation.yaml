@@ -1,48 +1,76 @@
-# Ablation evaluation: 3-step comparison of retriever and rewriter contributions.
-seeds: [42, 43, 44]
-test_persona: newcomer
-output_dir: results/ablation/
-questions_dir: data/questions/
-corpus_jsonl: data/chunks/corpus.jsonl
+# Held-out ablation: five arms on the held-out question split, all four personas.
+data:
+  questions_dir: data/questions
+  test_qids_path: data/splits/test_qids.txt
+  corpus_path: data/chunks/corpus.jsonl
+output_dir: results/ablation
+# All four profiles in personalization.profiles.PERSONAS. `newcomer` is the persona held out
+# of training; the other three are seen personas on unseen questions. Drop entries here to
+# shrink the run — every expected count is derived from this list.
+personas: [crammer, newcomer, scholar, steady]
+# Repetitions of the identical remote calls. Not seeds: no endpoint here exposes a verified
+# deterministic seed contract, so these measure endpoint sampling variance only. One
+# replicate means the run makes no variance claim. Widening to [1, 2, 3] triples the remote
+# bill and needs no code change; the notebook exposes REPLICATES_OVERRIDE for the same edit.
+replicates: [1]
 
-judge:
-  model: gemini/gemini-3.5-flash
-  max_retries: 3
+embedder:
+  model_name: Qwen/Qwen3-Embedding-0.6B
+  # Must equal embedder.max_seq_length in configs/train_ropg.yaml.
+  max_seq_length: 2048
+  fp16: true
+  batch_size: 16
 
-steps:
-  step1:
-    name: frozen_retriever_no_rewriter
-    description: "Frozen Qwen3-Embedding, no rewriter, gpt-5-nano generator"
-    embedder_adapter_path: null
-    rewriter_type: none
-    generator_model: gpt-5-nano
-    index_path: data/index/phase1.faiss
-    meta_path: data/index/phase1_meta.json
+rewriter:
+  model_name: Qwen/Qwen3-4B
+  max_seq_length: 768
+  batch_size: 8
+  generation:
+    max_new_tokens: 224
+    do_sample: false
 
-  step2:
-    name: ropg_kd_retriever_no_rewriter
-    description: "ROPG-KD Qwen3-Embedding adapter, no rewriter, gpt-5-nano generator"
-    embedder_adapter_path: data/rl/ropg_kd_checkpoints/best
-    rewriter_type: none
-    generator_model: gpt-5-nano
-    index_path: data/index/phase3.faiss
-    meta_path: data/index/phase3_meta.json
+artifacts:
+  ropg_adapter_path: models/ropg/runB/checkpoint-best
+  dpo_adapter_path: models/dpo/dpo/dpo_best
 
-  step3:
-    name: ropg_kd_retriever_dpo_rewriter
-    description: "ROPG-KD adapter + DPO Qwen3-4B rewriter, gpt-5-nano generator"
-    embedder_adapter_path: data/rl/ropg_kd_checkpoints/best
-    rewriter_type: dpo
-    dpo_model: Qwen/Qwen3-4B
-    dpo_adapter_path: data/rl/dpo_rewriter_runs/dpo/seed-42/dpo_best
-    dpo_max_seq_length: 768
-    generator_model: gpt-5-nano
-    index_path: data/index/phase3.faiss
-    meta_path: data/index/phase3_meta.json
+# Baseline ladder, one rung per arm. `profile: false` strips the learner profile from both
+# the retrieval instruction and the answer prompt; the judge always receives it.
+arms:
+  - {name: base_embedder_no_profile,       embedder: base,  profile: false, rewriter: none}
+  - {name: base_embedder,                  embedder: base,  profile: true,  rewriter: none}
+  - {name: trained_embedder,               embedder: ropg,  profile: true,  rewriter: none}
+  - {name: trained_embedder_base_rewriter, embedder: ropg,  profile: true,  rewriter: base}
+  - {name: trained_embedder_rewriter,      embedder: ropg,  profile: true,  rewriter: dpo}
 
 retrieval:
   top_k: 5
 
-chunking:
-  chunk_size: 800
-  chunk_overlap: 150
+generator:
+  model: deepseek-v4-flash
+  temperature: 0.2
+  max_completion_tokens: 1024
+  retry: {max_attempts: 3, initial_backoff_seconds: 1.0, backoff_multiplier: 2.0, max_backoff_seconds: 8.0}
+
+judges:
+  # Primary. Also labelled the DPO preference pairs, so arm-5 numbers are not judge-independent
+  # on this judge alone — that is what the secondary judge is for.
+  primary:
+    model: gpt-5.6-luna
+    reasoning_effort: low
+    temperature: 1.0
+    # Covers hidden low-effort reasoning plus the small JSON reply.
+    max_completion_tokens: 2048
+    retry: {max_attempts: 3, initial_backoff_seconds: 1.0, backoff_multiplier: 2.0, max_backoff_seconds: 8.0}
+  # Secondary. Independent of the pair labeller and of the ROPG teacher.
+  secondary:
+    model: gemini-3.7-flash
+    thinking_level: minimal
+    temperature: 0.0
+    max_output_tokens: 512
+    retry: {max_attempts: 3, initial_backoff_seconds: 1.0, backoff_multiplier: 2.0, max_backoff_seconds: 8.0}
+
+execution:
+  # Concurrent in-flight remote requests per rank; 16 across two T4s.
+  max_workers: 8
+  bootstrap_samples: 5000
+  bootstrap_seed: 42

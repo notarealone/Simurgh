@@ -41,9 +41,12 @@ are 9th-grade Persian language exam questions (MCQ and short-answer) covering me
 literary devices, and paraphrase of textbook poems. They must not be indexed — a
 question about a verse is not an answer to a question about a verse.
 
-In addition to the six real exam files, `ai_generated_questions.json` contains
-LLM-generated questions grounded in the same 9th-grade Persian curriculum, added to
-augment data quantity and improve lesson and question-type coverage across the corpus.
+In addition to the six real exam files, `ai_generated_questions.json` contains questions
+created by GLM 5.2 via the GLM web agent as **exam-seeded imitation**: the generator
+received real exam questions and answers and was asked to produce similar items. It was
+not grounded against `data/chunks/corpus.jsonl`. See [question-extraction](question-extraction.md),
+"AI-generated questions"; all 487 items' `answer` and `explanation` fields are
+model-authored and not human-verified.
 
 ---
 
@@ -201,23 +204,45 @@ Respond with a single decimal number only, e.g. 0.73
 
 ## 6. DPO Rewriter Dataset
 
-### Schema (`data/dpo/{train,val}.jsonl`)
+The pair files have been generated two ways. **Format 2 (rubric era)** is current;
+**format 1 (scalar era)** produced the frozen files behind the seed-42 screening result
+and is kept below because every published Stage-2 number so far was measured on it.
 
-Each line is one preference pair conditioned on a persona:
+### Schema (`data/dpo/{train,val}.jsonl`) — format 2
+
+Each line is one preference pair conditioned on a persona, carrying the judge verdict
+that produced it:
 
 ```jsonl
 {
-  "format_version": 1,
-  "question_ref": "khordad1403-keshvari:q5",
+  "format_version": 2,
+  "question_ref": "ai_generated_questions:q97",
   "persona_id": "crammer",
-  "query": "Question:\nمعنی بیت «پاک و بی‌عیب خدایی که به تقدیر عزیز» چیست؟",
-  "chosen": "معنی ساده بیت «پاک و بی‌عیب خدایی که به تقدیر عزیز» به زبان روزمره با مثال برای دانش‌آموز پایه نهم",
-  "rejected": "تحلیل صور خیال و وزن عروضی در بیت «پاک و بی‌عیب خدایی که به تقدیر عزیز»"
+  "query": "Question:\nمفهوم عبارت \"فکر انعام تو هرگز نکند شکرگزار\" را به زبان ساده توضیح دهید.",
+  "chosen": "توضیح ساده و گام به گام مفهوم عبارت «فکر انعام تو هرگز نکند شکرگزار» با مثال برای دانش‌آموز پایه نهم جهت امتحان",
+  "rejected": "مفهوم عبارت «فکر انعام تو هرگز نکند شکرگزار» با تمرکز بر ریشه، ساختار و پیوندهای مفهومی آن",
+  "pair_type": "cross_persona",
+  "chosen_score": 0.9495,
+  "rejected_score": 0.4025,
+  "margin": 0.547,
+  "chosen_sub_scores": {"meaning_preservation": 0.98, "persona_fit": 0.95, "specificity": 0.9},
+  "rejected_sub_scores": {"meaning_preservation": 0.55, "persona_fit": 0.2, "specificity": 0.45},
+  "chosen_temperature": 0.8,
+  "rejected_temperature": 0.2,
+  "rejected_persona_id": "scholar",
+  "judge_samples": 1
 }
 ```
 
-`chosen` is the rewrite the LLM judge rates as better at surfacing pedagogically
-useful material for this learner. `rejected` is worse.
+`chosen` is the rewrite the judge rates better at surfacing pedagogically useful material
+for this learner; `rejected` is worse. `pair_type` is `within_persona` or `cross_persona`.
+`rejected_persona_id` names the persona the rejected rewrite was *written for*, which
+differs from `persona_id` exactly on cross-persona rows.
+
+`chosen_score` and `rejected_score` are weighted rubric aggregates in `[0, 1]`, and
+`margin` is their difference. **On a cross-persona row `rejected_score` is the foreign
+rewrite scored under the target persona, not the score it earned under its own persona.**
+The row records the comparison that was actually made; the two are not interchangeable.
 
 `query` is the **complete rendered question** produced by `data.questions.load_question`
 — the same function and therefore the same string form used to build `data/ropg_kd/`
@@ -227,66 +252,125 @@ stem would train the rewriter on an input the pipeline never serves. `question_r
 `{exam_stem}:{qid}` line from the split file, so any row can be traced back to its source
 question.
 
-`format_version` is 1 for pairs built this way. `rl.dpo_train.load_pairs` refuses any
-other version, which is what stops the earlier stem-only pairs from being trained on
-silently — they load and train without error otherwise.
+`rl.dpo_train.load_pairs` refuses any `format_version` other than 2, and additionally
+requires `pair_type` and the three numeric score fields. A format-1 file therefore fails
+loudly at load rather than training silently on rows whose provenance is absent.
 
-The frozen files contain 1,739 training rows over 432 questions and 351 validation rows
-over 92 questions. Validation has 272 unique `(question_ref, persona_id)` keys. The files
-contain no empty completion, identical chosen/rejected pair, exact duplicate row, or
-train/validation question overlap.
+Row counts for the current build are recorded in the run manifest, not here, because the
+filters below reject a variable fraction of candidate pairs.
 
-Rows do not store judge scores, score margins, candidate temperature, source persona, or
-pair type. Training cannot reconstruct confidence or distinguish within-persona from
-cross-persona pairs. In particular, row order is not provenance. The corrected trainer
-uses every row as one binary preference and records this limitation in each run manifest.
-Data regeneration is gated on the result of corrected training and independent judging.
+The candidates remain off-policy for Qwen3-4B: Grok generates them, Luna ranks them, and
+Qwen is the policy/reference family.
 
-The candidates are off-policy for Qwen3-4B: Grok generated them, Luna ranked them, and
-Qwen is the policy/reference family. Standard DPO is the baseline. WPO tests weighting
-for this distribution gap, while robust DPO tests uniform label noise.
+### Candidate dumps (`data/dpo/candidates/`, `data/dpo/candidates_filtered/`)
 
-### Generation procedure (`src/data/gen_dpo_data.py`)
+Every candidate is persisted, one row per candidate — not per judge sample:
 
-For each `(question, persona_id)` in the split:
+```jsonl
+{
+  "format_version": 1,
+  "question_ref": "ai_generated_questions:q97",
+  "persona_id": "scholar",
+  "query": "Question:\n…",
+  "rewrite": "…",
+  "temperature": 0.8,
+  "sub_scores": {"meaning_preservation": 0.55, "persona_fit": 0.82, "specificity": 0.88},
+  "score": 0.727,
+  "judge_samples": 1,
+  "filter_reason": null,
+  "scored_as": {"crammer": {"sub_scores": {…}, "score": 0.4025, "judge_samples": 1}}
+}
+```
 
-1. Generate N=3 candidate rewrites using `PromptedRewriter` backed by a remote Grok
-   model (`grok-4-1-fast`) at temperatures 0.2, 0.5, 0.9 to ensure diversity.
-   Rewriter and judge calls within a question are parallelised
-   (`ThreadPoolExecutor`, `max_workers=4`) to reduce wall-clock time.
-2. For each candidate call the LLM judge (`gpt-5.6-luna` with `reasoning_effort: none`
-   and a 16-token completion budget — with reasoning enabled the budget is consumed by
-   reasoning tokens and the reply comes back empty) once with the prompt below. The judge
-   also receives the question's gold answer and explanation as reference context, so it
-   scores a rewrite against the material that actually resolves the question rather than
-   guessing at it. Those gold fields are judge-only: they never enter the rewriter's
-   prompt or the stored `query`, since a rewrite conditioned on the answer would leak it
-   into the retrieval query. Collect one score per candidate.
-3. Pair the highest-scored and lowest-scored candidates as `(chosen, rejected)`.
-4. **Cross-persona negatives**: within each question, the `chosen` rewrite for
-   `scholar` becomes a `rejected` for `crammer` (and vice versa) without additional
-   LLM calls. These cross-persona pairs are appended to the same output file.
+`candidates/` holds every candidate including rejects, each stamped with the
+`filter_reason` that discarded it (`min_judge_samples`, `duplicate_rewrite`).
+`candidates_filtered/` holds the survivors. `scored_as` is populated only for each
+persona's winner and records that rewrite judged under the *other* personas' rubric
+context — the numbers cross-persona pairing compares.
 
-Rewrite and judge calls are retried with capped exponential backoff; a candidate whose
-retry budget is exhausted is dropped rather than scored 0.0, and a persona left with
-fewer than two surviving candidates is skipped — so no pair is ever written with
-`chosen == rejected`.
+The dumps exist so pair filtering can be retuned offline. Changing a threshold means
+re-running selection over these files, not paying for generation again. This is the
+direct fix for the format-1 limitation that forced a full regeneration to answer any
+question about score distribution.
 
-Config keys: `rewriter.model`, `rewriter.temperatures`, `rewriter.max_workers`,
-`rewriter.max_attempts`, `judge.model`, `judge.reasoning_effort`, `judge.max_attempts`.
+### Generation procedure (`src/data/gen_dpo_data.py`) — format 2
 
-*Approach choice:* Direct rewrite scoring was chosen over end-to-end scoring
-(retrieve → generate → judge the final answer) on cost grounds — end-to-end would
-require N generation calls (800 tokens each) per (question, persona), which is
-prohibitive on a 4-week thesis budget. See [methodology](methodology.md) for the
-full trade-off analysis.
+For each question in the split:
 
-*Rewriter model:* An initial version used a local Gemma-4-E4B via Unsloth (4-bit
-quantised) to generate rewrites. Rewrite quality was insufficient, so the rewriter
-was replaced with a remote Grok model (`grok-4-1-fast`). The judge remains a
-separate model to preserve the judge-independence rule.
+1. Generate 4 candidate rewrites per persona with `PromptedRewriter` backed by
+   `grok-4-1-fast` at temperatures 0.2, 0.5, 0.8, 1.1 — 12 rewrites per question over the
+   three training personas. The four *draws* matter; the four *values* do not. Measured
+   over 5,184 candidates, mean judge score by temperature is 0.796 / 0.798 / 0.797 /
+   0.795 and wins per group are 312 / 314 / 339 / 331, so the ladder behaves like random
+   assignment. What produces the quality spread the judge ranks is the candidate count as
+   an order statistic (mean best-worst margin 0.129 at four candidates, 0.106 at three,
+   0.062 at two). Calls within a question are parallelised (`ThreadPoolExecutor`).
+2. Score each candidate with `gpt-5.6-luna` at `temperature: 0`, `reasoning_effort: none`,
+   and a 200-token budget, under a **strict `json_schema` response format**. The judge
+   returns one sub-score per rubric criterion rather than a single gestalt decimal, and
+   the configured weights collapse them into the aggregate that pair selection orders by.
+   With `judge.samples_per_candidate > 1` the sub-scores are averaged across samples
+   before weighting. The judge also receives the question's gold answer and explanation as
+   reference context; those fields are judge-only and never enter the rewriter's prompt or
+   the stored `query`, since a rewrite conditioned on the answer would leak it into the
+   retrieval query.
+3. Apply the candidate filters: drop candidates judged fewer than `min_judge_samples`
+   times, and collapse candidates that normalize to the same string, keeping the
+   highest-scored copy. Write both the full and the surviving sets to the dumps.
+4. **Within-persona pair** — take the top-scored survivor as `chosen`, then scan upward
+   from the worst survivor for a `rejected` that clears `min_margin` and is not a
+   near-duplicate of `chosen` (`max_pair_similarity`, difflib over NFKC-normalized text).
+   Scanning rather than taking the extreme keeps the widest genuine gap instead of
+   discarding the persona when the extreme pair happens to be a cosmetic twin. A persona
+   with no qualifying negative yields no row.
+5. **Cross-persona negatives** — re-score each persona's winner under every *other*
+   persona's rubric context, then emit a row for target persona X against a rewrite
+   written for Y only when X's own winner beats that foreign rewrite **as judged for X**
+   by `cross_persona_min_margin`. This costs 6 extra scorings per question and is the
+   reason cross-persona rows are labelled rather than assumed.
 
-### DPO judge prompt
+Rewrite and judge calls are retried with capped exponential backoff. An exhausted rewrite
+drops the candidate; an exhausted judge sample is skipped, and a candidate with no usable
+sample is dropped. No pair is written with `chosen == rejected`.
+
+Filters live in `configs/datagen_dpo.yaml` under `filters:` — `min_judge_samples`,
+`dedup_candidates`, `min_chosen_score`, `min_margin`, `max_pair_similarity`,
+`cross_persona_min_margin`. The generator refuses to start when `min_judge_samples`
+exceeds `judge.samples_per_candidate`, which would otherwise discard every candidate after
+the entire run had been paid for.
+
+Candidate dump directories default to `data.candidates_dir` and
+`data.filtered_candidates_dir` and are overridable with `--candidates-out` and
+`--filtered-candidates-out`.
+
+**Verified endpoint capabilities.** `gpt-5.6-luna` accepts `temperature: 0` and strict
+`json_schema` response formats; both were confirmed against the live route before the
+recipe was adopted. `OpenAICompatClient` forwards `response_format` only when set, so
+other call sites are unaffected.
+
+**Calibrated threshold.** `min_margin` was a starting guess at 0.10 and is now **0.04**,
+set by rescoring 300 frozen candidates three times in `benchmarks/judge_noise.py` —
+method and numbers in [judge-noise-luna-v1](results/judge-noise-luna-v1.md). The judge is
+not deterministic at `temperature: 0` (18.0% byte-identical replies, single-draw
+SD 0.0265), which is why `samples_per_candidate` is 3 rather than 1. Raising the
+threshold from 0.04 to 0.10 discards 36.6% of within-persona rows while leaving modeled
+label error at essentially zero either way, so the low value is the better trade. Two
+thresholds remain uncalibrated: `cross_persona_min_margin`, because the noise experiment
+formed within-persona pairs only, and `min_chosen_score`, which sits in the score band
+where the judge is least reliable.
+
+**As-built measurements.** The shipped v4 files were audited after generation:
+[dpo-data-v4-audit](results/dpo-data-v4-audit.md). Headlines — 2,658 train / 534 val rows
+over the same 432 / 92 questions, 96.9% group yield, modeled label error 0.08%, zero
+same-persona contradictions and zero split leakage, and a measured persona-discrimination
+effect (a rewrite scores 0.180 lower under a foreign persona, in 97.1% of cross-persona
+rows). The audit also records the open risk: `scholar` appears as the negative 1.6× more
+often than as the positive, because the 0.40-weighted `meaning_preservation` criterion
+penalises advanced rewrites of questions whose own wording prescribes a simple register.
+Row counts and distributions in this section describe the schema; per-generation numbers
+live in the audit, which is versioned alongside the data.
+
+### DPO judge prompt — format 2
 
 ```
 You are an expert Persian language tutor evaluating query rewrites for a RAG
@@ -306,6 +390,104 @@ Gold explanation/rubric:
 
 Candidate rewrite: {rewrite}
 
+Score how well this rewrite would help retrieve the right study material for this
+specific student. Rate each criterion independently from 0.0 to 1.0, where 0.0 is a
+complete failure on that criterion and 1.0 could not be improved:
+  - meaning_preservation (weight 0.4): Does the rewrite preserve the original
+    question's meaning, scope, and intent without inventing facts, narrowing the
+    topic, or answering the question itself?
+  - persona_fit (weight 0.35): Does the vocabulary, depth, and framing match this
+    specific learner's background, goal, and tolerance for detail, rather than being
+    generically well written?
+  - specificity (weight 0.25): Is the query concrete enough to surface the right
+    passages — naming the actual concepts and prerequisite terms — without being so
+    narrow it misses them?
+
+Judge each criterion on its own merits — a rewrite may score high on one and low on
+another. Use the full range; reserve scores above 0.9 for rewrites you cannot improve.
+```
+
+The rubric block and the response schema are both generated from `judge.rubric` in the
+config, so adding or reweighting a criterion is a config edit. Weights must sum to 1.0 or
+the generator refuses to start.
+
+**The weights encode a policy choice.** At 0.40 vs 0.35, fidelity to the question outranks
+fitting the learner. On questions whose wording prescribes a register — e.g. one asking for
+an explanation «به زبان ساده» — a scholar-appropriate rewrite that pivots to etymology and
+structure is penalised on `meaning_preservation` and can lose to a simpler rewrite even
+when judged *for the scholar*. That is a defensible ranking, not a bug, but it
+systematically disadvantages the scholar persona on such items and should be checked
+against the `pair_type` × `persona_id` cross-tab after each build.
+
+The reference block is omitted defensively only when a question carries neither gold
+field. Every question in the current bank has both: **618/618** have a gold `answer` and
+**618/618** have an `explanation`, so the block is currently never omitted.
+
+---
+
+### History: format 1 (scalar era, retired)
+
+Format 1 produced the frozen files behind
+[dpo-arms-seed42-v1](results/dpo-arms-seed42-v1.md). Its rows carried only
+`format_version`, `question_ref`, `persona_id`, `query`, `chosen`, `rejected`:
+
+```jsonl
+{
+  "format_version": 1,
+  "question_ref": "khordad1403-keshvari:q5",
+  "persona_id": "crammer",
+  "query": "Question:\nمعنی بیت «پاک و بی‌عیب خدایی که به تقدیر عزیز» چیست؟",
+  "chosen": "معنی ساده بیت «پاک و بی‌عیب خدایی که به تقدیر عزیز» به زبان روزمره با مثال برای دانش‌آموز پایه نهم",
+  "rejected": "تحلیل صور خیال و وزن عروضی در بیت «پاک و بی‌عیب خدایی که به تقدیر عزیز»"
+}
+```
+
+Procedure: 3 rewrites per `(question, persona)` from `grok-4-1-fast` at temperatures
+0.2/0.5/0.9 (`max_workers=4`); one judge call per candidate to `gpt-5.6-luna` at
+`temperature: 1.0`, `reasoning_effort: none`, `max_completion_tokens: 16`, replying with a
+single bare decimal parsed by a strict regex; `chosen` = highest, `rejected` = lowest, with
+**no margin filter**; cross-persona negatives appended in both orientations whenever the
+two personas' best scores differed by more than `cross_persona_threshold: 0.25`, with no
+additional LLM calls.
+
+Frozen contents: 1,739 training rows over 432 questions and 351 validation rows over 92
+questions, 272 unique validation `(question_ref, persona_id)` keys. No empty completion,
+identical chosen/rejected pair, exact duplicate row, or train/validation question overlap.
+
+Why it was replaced — four defects, each addressed above:
+
+1. **No provenance.** Rows stored no scores, margins, temperatures, source persona, or
+   pair type, so no question about the data could be answered without regenerating it.
+   Row order is not provenance.
+2. **Best-of-3 vs worst-of-3 from one model.** With no margin filter, any persona with two
+   surviving candidates produced a pair, so the contrast was frequently style jitter rather
+   than a quality difference. Measured on the frozen files: 0 identical pairs, but 5.06% of
+   train rows are near-duplicates at difflib ratio ≥ 0.90, and mean lengths differ by under
+   3 characters (chosen 110.1, rejected 107.1).
+3. **Noisy labels.** A single bare scalar at `temperature: 1.0` with a 16-token budget.
+   Judge self-agreement was 73.0% and Luna–Gemini agreement 65–70%; held-out preference
+   accuracy peaked at 0.69, roughly the labels' own self-consistency ceiling. See
+   [judge-agreement-luna-gemini-v1](results/judge-agreement-luna-gemini-v1.md).
+4. **Unlabelled cross-persona rows.** The 0.25 gate compared two scores produced under two
+   *different* persona prompts, so the gap was not a like-for-like quantity and the pair
+   was never actually judged.
+
+*Approach choice, unchanged:* direct rewrite scoring was chosen over end-to-end scoring
+(retrieve → generate → judge the final answer) on cost grounds — end-to-end would require
+N generation calls of ~800 tokens per (question, persona). Note the cost argument applies
+to *answer* generation; a retrieval-grounded reward was considered separately and rejected
+on the design ground that the rewriter is evaluated independently of retrieval. See
+[methodology](methodology.md).
+
+*Rewriter model:* an initial version used a local Gemma-4-E4B via Unsloth (4-bit
+quantised). Rewrite quality was insufficient, so the rewriter was replaced with
+`grok-4-1-fast`. The judge remains a separate model to preserve the judge-independence
+rule.
+
+*Judge prompt, format 1:* identical framing to the current one down to the reference
+block, then:
+
+```
 Rate 0.0–1.0 how well this rewrite would help retrieve the right study material
 for this specific student. A good rewrite should:
   - Preserve the original question's meaning
@@ -314,9 +496,6 @@ for this specific student. A good rewrite should:
 
 Respond with a single decimal number only, e.g. 0.61
 ```
-
-The reference block is omitted entirely when a question carries neither field (7 of 524
-have no gold answer, 509 have no explanation).
 
 ---
 
@@ -327,9 +506,11 @@ The current files use a deterministic **question-level** random split with seed 
 which prevents leakage from the multiple persona and pair rows attached to one question.
 
 This split is not source-exam-disjoint. Questions from all seven source files were pooled
-before shuffling, and six source families occur in both train and validation. Results must
-therefore be described as question-disjoint but source-overlapping. Existing DPO and
-ROPG assets stay frozen for this experiment; this pass does not re-split them.
+before shuffling, and source files occur in more than one split. Results must therefore be
+described as question-disjoint but source-overlapping. The splitter also does not enforce
+shared-passage (`group_id`) isolation, so a shared passage may cross splits.
+
+Existing DPO and ROPG assets stay frozen for this experiment; this pass does not re-split them.
 
 An optional `--fixed-exam-splits` mode pins the six real exam files to their historical
 splits and randomizes only remaining files. It can reproduce the original per-exam

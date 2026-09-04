@@ -115,3 +115,12 @@ substitute within the 4-week, minimal-compute project constraints.
 
 Implementation: `src/data/gen_dpo_data.py` (script) and `notebooks/gen_dpo_data.ipynb`
 (Kaggle notebook).
+
+### v1.4 — 2026-08-28 — retriever encoder, objective, and teacher judge all changed
+
+- **Encoder: BGE-M3 → `Qwen/Qwen3-Embedding-0.6B` + LoRA.** BGE-M3 was never run; every config, index, and checkpoint in the repo uses Qwen3-Embedding-0.6B, so v1.2's five-rung ladder must be read with that substitution in Rungs 1–4.
+- **Objective: KL-divergence distillation (`reader_kd`) → MNRL hard-negative contrast (`hard_neg`).** `reader_kd` remains a documented ablation (`mode: reader_kd` still runs); the rationale is in [methodology](methodology.md), "Why `reader_kd` was retired as the primary arm".
+- **ROPG teacher judge: `gpt-5.4-nano` → `gpt-5.6-luna`.** The nano labels are archived at `data/ropg_kd/old_v2/`; the era change and its rationale are recorded in [methodology](methodology.md), "Label eras".
+- **DPO candidate generation: N=6 rewrites at temperatures 0.3–1.3 → N=3 at `[0.2, 0.5, 0.9]`.** Candidates come from `grok-4-1-fast`, Luna judges them at `reasoning_effort: none`, and cross-persona pairs are gated by `cross_persona_threshold: 0.25` rather than added unconditionally.
+- **Reward: the v1.1 `retrieval_quality + λ · persona_fit` end-to-end reward was never implemented.** Stage 1 uses a 0–1 per-document utility score, Stage 2 uses per-rewrite 0–1 proxy scores turned into preference pairs, and the 1–10 end-to-end judge survives only in `src/rl/scorer.py` and `src/rl/preference_pairs.py`, both superseded and off the live path.
+- **Splits are question-level, not source-level.** The frozen question-level assets and their source/shared-passage overlap are documented in [data-design](data-design.md), "Split Strategy".

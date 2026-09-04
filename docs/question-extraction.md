@@ -6,15 +6,15 @@
 
 ## Why this matters
 
-The corpus ([data-extraction](data-extraction.md)) is what the RAG system *reads*. The questions documented here are what it is *tested on* and trained against. They start as exam PDFs — often scanned, sometimes with a separate answer key in a different file — and must become a clean, machine-parseable dataset that scripts split into train/validation/test without leakage. Documenting the path lets a reviewer judge the data and lets me rebuild it the same way later.
+The corpus ([data-extraction](data-extraction.md)) is what the RAG system *reads*. The questions documented here are what it is *tested on* and trained against. They start as exam PDFs — often scanned, sometimes with a separate answer key in a different file — and must become a clean, machine-parseable dataset. The current split prevents row-level leakage (`question_ref` does not cross splits), but source files and shared passages may overlap.
 
 ## Pipeline
 
 1. **Collect exam sources.** PDFs / images of exam papers (چهارگزینه‌ای, جای خالی, تشریحی, …). Answer keys are sometimes in the same file, sometimes a separate file, sometimes absent.
 2. **Extract with a VLM.** Feed the exam page images to a vision model with the [prompt below](#vlm-extraction-prompt). It returns **one JSON object per exam**: a `passages` array plus a `questions` array.
-3. **Store raw JSON.** One file per source, e.g. `data/exams/raw/<source-slug>.json`. The filename carries the source identity. Validate every file with `json.loads` before trusting it — a model occasionally emits a raw newline inside a string (`Invalid control character`) or a stray `...`; re-prompt or repair those. Never commit large dataset files (see [CLAUDE](../CLAUDE.md) repo rules).
+3. **Store reviewed JSON.** The committed question files live in `data/questions/*.json`, one file per source. The filename carries the source identity. Validate every file with `json.loads` before trusting it — a model occasionally emits a raw newline inside a string (`Invalid control character`) or a stray `...`; re-prompt or repair those. Never commit large dataset files (see [CLAUDE](../CLAUDE.md) repo rules).
 4. **Join answers (when separate).** Where the answer key is a different file, a downstream script matches it to the question rows on `number` (unique within the file) and fills the `answer` field wherever it is `null`.
-5. **Flatten + split.** Scripts read the JSON, flatten to CSV, and produce train/val/test splits **by source** (never by row) so no passage/question crosses splits — the no-leakage rule in [CLAUDE](../CLAUDE.md) / [things-to-consider](things-to-consider.md).
+5. **Flatten + split.** Scripts read the JSON, flatten to CSV, and produce question-level train/val/test assignments in `src/data/corpus_chunker.py`, not row-level assignments. The frozen files are `question_ref`-disjoint but source-overlapping, and shared-passage (`group_id`) isolation is not enforced; see [data-design](data-design.md), "Split Strategy".
 
 The VLM step is not byte-reproducible (a second run of the same page may differ slightly). Treat each JSON as a reviewed artifact, not a deterministic build output — spot-check a sample against the source PDF.
 
@@ -27,7 +27,7 @@ The VLM step is not byte-reproducible (a second run of the same page may differ 
 - **`number` is the join key.** The printed question number is transcribed verbatim and is unique within the file, so a separate answer-key file is joined on `number`. `id` is a normalized ASCII handle (`q<number>`) for a stable per-row reference after flattening.
 - **Persian content is preserved verbatim.** No ZWNJ / ye-ke / digit normalization at extraction — that is applied consistently downstream in `src/data/persian.py` to both corpus and queries. The VLM transcribes exactly what is printed; it does not translate or silently "correct" the script.
 - **Source emphasis is preserved.** Underlined / bold / highlighted spans — the "بخش مشخص شده" that many questions depend on — are wrapped in Markdown bold (`**…**`) inside the text, so the marked word survives into the dataset. It is the only markup added to otherwise-verbatim text, stays distinct from the `____` blank marker, and downstream can render or strip it.
-- **Splits are not assigned here.** Extraction produces questions only; train/val/test assignment is a separate, source-aware step.
+- **Splits are not assigned here.** Extraction produces questions only; train/val/test assignment is a separate, question-level step in `src/data/corpus_chunker.py`. The optional `--fixed-exam-splits` mode is source-aware but did not build the frozen files.
 
 ## Question types
 
@@ -44,7 +44,7 @@ The VLM picks the `type` that best fits each question and follows that type's fi
 | `ordering` | مرتب‌کردن | array of item positions in correct order, 1-based |
 | `other` | anything else | best-effort; describe shape in `notes` |
 
-**Passage-grouped questions** (a shared متن / reading passage with sub-questions) are kept together: the shared text goes once in the top-level `passages` array, and each sub-question carries the matching `group_id`. Downstream, a group is never split across train/val/test.
+**Passage-grouped questions** (a shared متن / reading passage with sub-questions) are kept together in the extraction schema: the shared text goes once in the top-level `passages` array, and each sub-question carries the matching `group_id`. The current splitter does not enforce `group_id` isolation, so a shared passage can appear across splits; do not describe the frozen assets as passage-disjoint.
 
 ## JSON schema
 
@@ -205,15 +205,26 @@ EXAMPLE (shape only)
 
 ## AI-generated questions
 
-`data/questions/ai_generated_questions.json` was **not** produced by the VLM extraction
-pipeline above. It contains questions generated by an LLM, grounded in the 9th-grade
-Persian curriculum, and added to augment the real exam question bank for improved data
-quantity and lesson coverage. The file follows the same JSON schema (see above) so it
-is handled identically by all downstream scripts and enters the question-level split
-shuffle alongside the real exam files.
+`data/questions/ai_generated_questions.json` was produced outside the VLM extraction
+pipeline above by **GLM 5.2 via the GLM web agent**. The agent was seeded with real exam
+questions together with their answers and asked to produce similar questions. The result
+is **exam-seeded**, curriculum-adjacent by imitation, and was not checked against
+`data/chunks/corpus.jsonl`; it is not corpus-grounded.
+
+Generation happened in a chat web agent, not a repository script. No prompt file,
+temperature, or seed exists, so the JSON is a reviewed artifact and is not reproducible.
+It uses the same schema as the VLM output, so downstream handling is identical. The file
+contains **487 of 618 questions (78.8%)**: 337/432 train, 74/92 validation, and 76/94
+test. Its type mix is `short_answer` 199, `fill_blank` 106, `true_false` 82,
+`matching` 74, `mcq` 26, and no essays. All 487 `answer` and `explanation` fields are
+model-authored and not human-verified.
 
 ## Limitations
 
 - **Not reproducible byte-for-byte.** The VLM runs behind a model API; a rerun of the same page will differ. Treat each JSON as a reviewed artifact and spot-check against the source.
 - **Transcription errors can survive review.** A misread character that still forms a plausible Persian word passes both the model and a quick read.
 - **`answer: null` is not a claim about correctness.** It only means the answer was not on the page — the join step still has to supply (and a human should spot-check) the gold answer.
+- **Model-authored gold dominates the pool.** All 487 AI-generated questions use
+  model-authored, non-human-verified answers and explanations. Any EM/F1 or
+  reader-in-the-loop signal therefore rests on model-authored gold for roughly four
+  fifths of the pool; the held-out test set is 76/94 (**80.9%**) AI-generated.

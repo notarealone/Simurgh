@@ -27,7 +27,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_REQUIRED_FIELDS = ("question_ref", "persona_id", "query", "chosen", "rejected")
+_REQUIRED_FIELDS = ("question_ref", "persona_id", "query", "chosen", "rejected", "pair_type")
+# Format 2 rows carry the judge verdict that produced them, so training-time analysis no
+# longer has to report score and pair provenance as unavailable.
+_REQUIRED_NUMERIC_FIELDS = ("chosen_score", "rejected_score", "margin")
+_PAIR_TYPES = ("within_persona", "cross_persona")
 _PINNED_PACKAGES = {
     "unsloth": "2026.8.22",
     "trl": "0.24.0",
@@ -204,6 +208,18 @@ def load_pairs(path: str | Path) -> list[dict[str, Any]]:
                 f"{pair_path} line {line_number} has unknown training persona "
                 f"{record['persona_id']!r}; expected one of {sorted(known_personas)}"
             )
+        for numeric_field in _REQUIRED_NUMERIC_FIELDS:
+            value = record.get(numeric_field)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(
+                    f"{pair_path} line {line_number} field {numeric_field!r} must be a number; "
+                    f"regenerate with src/data/gen_dpo_data.py"
+                )
+        if record["pair_type"] not in _PAIR_TYPES:
+            raise ValueError(
+                f"{pair_path} line {line_number} has unknown pair_type "
+                f"{record['pair_type']!r}; expected one of {sorted(_PAIR_TYPES)}"
+            )
         if record["chosen"].strip() == record["rejected"].strip():
             raise ValueError(
                 f"{pair_path} line {line_number} has identical chosen and rejected completions"
@@ -222,6 +238,19 @@ def load_pairs(path: str | Path) -> list[dict[str, Any]]:
     return pairs
 
 
+def _quantiles(values: list[float]) -> dict[str, float]:
+    ordered = sorted(values)
+    last = len(ordered) - 1
+    return {
+        "min": ordered[0],
+        "p25": ordered[round(0.25 * last)],
+        "median": ordered[round(0.50 * last)],
+        "p75": ordered[round(0.75 * last)],
+        "max": ordered[last],
+        "mean": sum(ordered) / len(ordered),
+    }
+
+
 def _split_summary(pairs: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "rows": len(pairs),
@@ -231,6 +260,19 @@ def _split_summary(pairs: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "personas": dict(sorted(Counter(pair["persona_id"] for pair in pairs).items())),
     }
+
+
+def _score_summary(pairs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Judge-score distribution. Format 2 rows always carry scores, so this is never empty."""
+    return {
+        "chosen": _quantiles([pair["chosen_score"] for pair in pairs]),
+        "rejected": _quantiles([pair["rejected_score"] for pair in pairs]),
+        "margin": _quantiles([pair["margin"] for pair in pairs]),
+    }
+
+
+def _pair_type_summary(pairs: list[dict[str, Any]]) -> dict[str, Any]:
+    return dict(sorted(Counter(pair["pair_type"] for pair in pairs).items()))
 
 
 def validate_splits(
@@ -249,8 +291,14 @@ def validate_splits(
         "train": _split_summary(train_pairs),
         "validation": _split_summary(val_pairs),
         "question_overlap": 0,
-        "score_analysis": "unavailable: pair files do not store judge scores",
-        "pair_type_analysis": "unavailable: pair files do not store pair provenance",
+        "score_analysis": {
+            "train": _score_summary(train_pairs),
+            "validation": _score_summary(val_pairs),
+        },
+        "pair_type_analysis": {
+            "train": _pair_type_summary(train_pairs),
+            "validation": _pair_type_summary(val_pairs),
+        },
     }
 
 
@@ -340,7 +388,9 @@ def measure_token_lengths(
         raise ValueError(f"{split_name} has {zero_completions} zero-token completions")
     if violations:
         details = ", ".join(
-            f"{name}={stats['over_limit']}" for name, stats in summary.items() if stats["over_limit"]
+            f"{name}={stats['over_limit']}"
+            for name, stats in summary.items()
+            if stats["over_limit"]
         )
         raise ValueError(f"{split_name} exceeds configured token budgets: {details}")
     logger.info("%s token lengths: %s", split_name, json.dumps(summary, sort_keys=True))
@@ -515,7 +565,12 @@ def train(
 
     accumulation, effective_batch = _derive_batch(training_config, world_size)
     run_dir = Path(training_config["run_root"]) / selected_arm / f"seed-{selected_seed}"
-    if _is_rank_zero() and run_dir.exists() and any(run_dir.iterdir()) and not resume_from_checkpoint:
+    if (
+        _is_rank_zero()
+        and run_dir.exists()
+        and any(run_dir.iterdir())
+        and not resume_from_checkpoint
+    ):
         raise FileExistsError(
             f"Run directory is not empty: {run_dir}. Pass --resume-from-checkpoint explicitly."
         )

@@ -1,8 +1,8 @@
 """Learner persona definitions for the Simurgh RAG pipeline.
 
 Schema and rendered texts sourced from docs/personas.md.
-Three personas (crammer, scholar, steady) are used in train/val;
-newcomer is held out for test only.
+Three train-split personas (crammer, scholar, steady) are used for both training and
+validation; newcomer is test-only.
 """
 
 from __future__ import annotations

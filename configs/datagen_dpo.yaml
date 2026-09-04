@@ -1,13 +1,17 @@
 rewriter:
   model: grok-4-1-fast
-  # Three samples per (question, persona), spanning the previous range's cold and warm
-  # ends. Four temperatures bought density inside the range, not width, and every extra
-  # temperature costs one rewrite call plus one judge call per persona.
-  temperatures: [0.2, 0.5, 0.9]
+  # Four candidates per (question, persona) group. Measured over 300 candidates
+  # (data/dpo/judge_noise/samples.jsonl): the temperature *values* buy nothing — mean judge
+  # score is flat across the ladder (0.828 / 0.824 / 0.811 / 0.825) and each rung wins its
+  # group about a quarter of the time (18/22/18/17). What buys the quality spread pair
+  # selection needs is the candidate *count*: mean best-worst margin is 0.129 at four
+  # candidates, 0.106 at three, 0.063 at two. Keep four draws — the spread is an order
+  # statistic, not a temperature effect.
+  temperatures: [0.2, 0.5, 0.8, 1.1]
   # Measured over the existing pairs: rewrites run 36 tokens on average (p90 52, max 137),
   # so 300 is headroom, not a binding cap.
   max_completion_tokens: 300
-  max_workers: 4
+  max_workers: 16
   # Retry API exceptions and empty completions with exponential, capped backoff;
   # exhaustion drops that single candidate rather than scoring it.
   max_attempts: 3
@@ -18,23 +22,93 @@ rewriter:
 judge:
   model: gpt-5.6-luna
   # Luna is a reasoning model: with reasoning enabled, reasoning tokens consume the
-  # 16-token completion budget and the response comes back empty. Same setting as
+  # completion budget and the response comes back empty. Same setting as
   # configs/datagen_ropg.yaml.
   reasoning_effort: none
-  temperature: 1.0
-  max_completion_tokens: 16
-  # Retry API exceptions and malformed numeric responses with exponential, capped
-  # backoff; exhaustion drops the candidate instead of assigning score zero.
+  # Verified against the live endpoint: Luna accepts temperature 0 and strict
+  # json_schema response formats. Deterministic decoding removes the sampling noise that
+  # made the v1 labels disagree with themselves.
+  temperature: 0.0
+  # The reply is a JSON object of rubric sub-scores, not a bare decimal, so the 16-token
+  # budget of the v1 recipe no longer fits.
+  max_completion_tokens: 200
+  # Judge noise is real at temperature 0: over 300 candidates rescored three times, only 18%
+  # of candidates returned byte-identical replies and the single-draw score SD was 0.0265
+  # (p90 0.041, max 0.137, concentrated in the 0.40-0.70 band). Averaging three judgements
+  # cuts that to 0.0153, dropping the simulated orientation-error rate of an emitted pair
+  # from 3.8% to 0.5% at filters.min_margin 0.04. Costs 3 judge calls per candidate: about
+  # 28k calls, roughly $6, for a full 524-question run.
+  samples_per_candidate: 3
+  # Sub-scores the judge returns under a strict schema, and the weights that collapse
+  # them into the single number pair selection orders by. Weights must sum to 1.0.
+  # Splitting the verdict forces the judge to separate "means the same thing" from
+  # "sounds right for this learner" instead of blending them into one impression.
+  rubric:
+    - name: meaning_preservation
+      weight: 0.40
+      description: >-
+        Does the rewrite preserve the original question's meaning, scope, and intent
+        without inventing facts, narrowing the topic, or answering the question itself?
+    - name: persona_fit
+      weight: 0.35
+      description: >-
+        Does the vocabulary, depth, and framing match this specific learner's background,
+        goal, and tolerance for detail, rather than being generically well written?
+    - name: specificity
+      weight: 0.25
+      description: >-
+        Is the query concrete enough to surface the right passages — naming the actual
+        concepts and prerequisite terms — without being so narrow it misses them?
+  # Retry API exceptions and schema-invalid responses with exponential, capped backoff;
+  # exhaustion drops that judge sample, and a candidate with no usable sample is dropped.
   max_attempts: 3
   initial_backoff_seconds: 1.0
   backoff_multiplier: 2.0
   max_backoff_seconds: 8.0
 
-cross_persona_threshold: 0.25
+# Applied after scoring, so retuning them means rerunning selection over the candidate
+# dumps rather than paying for generation again.
+filters:
+  # Candidate filters — gate the filtered-candidate dump and everything built from it.
+  #
+  # Must not exceed judge.samples_per_candidate, or every candidate is discarded. At a budget
+  # of 3, requiring 2 still averages a candidate that lost one sample to retry exhaustion,
+  # where requiring 3 would throw it away.
+  min_judge_samples: 2
+  # Candidates that normalize to the same string cannot express a preference; keep the
+  # highest-scored copy.
+  dedup_candidates: true
+
+  # Pair filters — gate the training rows.
+  #
+  # The chosen side must clear an absolute bar, so a pair of two poor rewrites with a
+  # wide gap does not teach the policy to imitate the less-bad one.
+  min_chosen_score: 0.55
+  # The score gap must exceed the judge's noise floor. Calibrated with
+  # benchmarks/judge_noise.py over 75 (question, persona) groups: 0.04 is where the
+  # accuracy/volume tradeoff turns. Raising it to 0.10 cuts surviving groups from 62/75 to
+  # 34/75 while the orientation-error rate of the emitted pair barely moves (7.6% -> 7.5%
+  # empirically), because selection already takes best-vs-worst, whose true gap is wide.
+  # Effective training signal, n * (1 - 2p)^2, peaks at 0.04.
+  min_margin: 0.04
+  # Reject pairs whose completions differ only cosmetically; at that point the score gap
+  # is judge jitter, not a preference. Ratio is difflib on NFKC-normalized text.
+  max_pair_similarity: 0.95
+  # Same rule for cross-persona rows. Both sides are scored under the target persona, so the
+  # margin is a like-for-like comparison. NOT calibrated: benchmarks/judge_noise.py only
+  # forms within-persona pairs, so this is still the original guess and is now deliberately
+  # stricter than min_margin. It was the top rejection reason in trial runs; measure it with
+  # its own pass before loosening.
+  cross_persona_min_margin: 0.10
 
 data:
   questions_dir: data/questions
   splits_dir: data/splits
   output_dir: data/dpo
+  # Every candidate with its sub-scores, including the ones filtering discarded.
+  candidates_dir: data/dpo/candidates
+  # The subset that survived the candidate filters. Override both with
+  # --candidates-out / --filtered-candidates-out.
+  filtered_candidates_dir: data/dpo/candidates_filtered
 
 seed: 42
