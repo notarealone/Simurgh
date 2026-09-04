@@ -100,15 +100,16 @@ eval:
                          # retriever runs".
                          # Note Recall@k divides by m, so Recall@1 is capped at 1/m -
                          # hence Recall is reported at K only, where the ceiling is 1.0.
-  # Persona-swap control. Re-scores every val query under a *rotated* persona
-  # (crammer→scholar→steady→crammer) against the same corpus embedding, and logs the
-  # matched-minus-swapped delta each epoch. That delta is the personalisation signal in
-  # isolation: personas reach the retriever only through the `Instruct:` prefix, so an
-  # encoder that ignores the prefix still improves every headline metric while
-  # personalising nothing — the outcome the thesis must rule out. Ranking with the wrong
-  # persona costs 0.33 nDCG@5 under the val labels, so a persona-sensitive encoder has
-  # to degrade visibly here. Cheap: the corpus embedding is reused and only 276 queries
-  # are re-encoded. Compare with `benchmarks/compare_runs.py --swap`.
+  # Persona-mismatch (counterfactual swap) control. Re-scores every val query under a
+  # rotated, valid persona different from the group's persona_id
+  # (crammer→scholar→steady→crammer) against the same corpus embedding. "Mismatched"
+  # means the substituted profile differs from the persona whose fixed,
+  # persona-conditioned teacher labels are being evaluated; it does not mean that the
+  # substituted persona is invalid. The raw query, corpus embedding, and labels stay
+  # fixed, so only the `Instruct:` prefix changes. The matched-minus-swapped delta is
+  # the personalisation signal in isolation. Under the Luna-era labels, this deliberate
+  # mismatch costs 0.1363 nDCG@5. Cheap: the corpus embedding is reused and only 276
+  # queries are re-encoded. Compare with `benchmarks/compare_runs.py --swap`.
   persona_swap: true
   eval_batch_size: 32    # corpus + val-query encoding only, and unrelated to batch_size:
                          # encode_texts is no-grad, so nothing is retained for backward and

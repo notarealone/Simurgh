@@ -89,12 +89,15 @@ def format_query(query: str, persona_id: str | None) -> str:
     return f"Instruct: {render_profile(persona_id)}\nQuery: {query}"
 
 
-# Persona-swap control (see ``evaluate_retrieval``). A rotation over the *train*
-# personas, in their declared order, so every group is re-rendered under a persona that
-# is not its own while the per-persona cell sizes stay identical. Derived rather than
-# hard-coded: adding a fourth training persona extends the cycle automatically, and the
-# held-out test persona is deliberately excluded — introducing it here would leak the
-# holdout into a validation-time diagnostic.
+# Persona-mismatch (counterfactual swap) control (see ``evaluate_retrieval``). A
+# rotation over the *train* personas, in their declared order, so every group is
+# re-rendered under a valid persona different from its own. "Mismatched" means the
+# query prefix no longer matches the ``persona_id`` whose fixed teacher labels are
+# being evaluated; it does not mean that the substituted persona is invalid. The
+# per-persona cell sizes stay identical. Derived rather than hard-coded: adding a
+# fourth training persona extends the cycle automatically, and the held-out test
+# persona is deliberately excluded — introducing it here would leak the holdout into a
+# validation-time diagnostic.
 _TRAIN_PERSONA_IDS = [p.id for p in train_personas()]
 PERSONA_ROTATION: dict[str, str] = {
     pid: _TRAIN_PERSONA_IDS[(i + 1) % len(_TRAIN_PERSONA_IDS)]
@@ -902,15 +905,18 @@ def evaluate_retrieval(
     Note Recall@k divides by the size of that set, so Recall@1 could never exceed
     1/*relevance_top_m*; it is reported at k=K only, where the ceiling is 1.0.
 
-    *swap_personas* additionally scores every query under a **rotated** persona
-    (crammer→scholar→steady→crammer) against the same corpus embedding, and returns
-    the result under ``metrics["persona_swap"]``. This is the control for the thesis
-    claim: personas are only a prompt prefix, so an encoder that ignores that prefix
-    still improves every headline metric while personalising nothing. Measured on the
-    val labels, ranking with the wrong persona costs 0.33 nDCG@5, so a genuinely
-    persona-sensitive encoder must degrade visibly here. Rotation is used rather than a
-    random reassignment because it keeps the 92/92/92 persona balance exact and is
-    deterministic across runs.
+    *swap_personas* additionally scores every query under a **rotated, mismatched**
+    persona (crammer→scholar→steady→crammer) against the same corpus embedding, and
+    returns the result under ``metrics["persona_swap"]``. The substituted profile is
+    valid; "mismatched" means it differs from the group's ``persona_id`` while the
+    original persona-conditioned teacher labels remain fixed. The raw query, corpus
+    embedding, and labels stay fixed, so only the ``Instruct:`` prefix changes. This is
+    the control for the thesis claim: personas are only a prompt prefix, so an encoder
+    that ignores that prefix still improves every headline metric while personalising
+    nothing. Under the current Luna-era validation labels, this deliberate mismatch
+    costs 0.1363 nDCG@5, so a genuinely persona-sensitive encoder must degrade visibly
+    here. Rotation is used rather than a random reassignment because it keeps the
+    92/92/92 persona balance exact and is deterministic across runs.
 
     Only the group's own judged chunks have gains — the other ~150 corpus chunks score
     0 even if genuinely relevant. That incomplete-judgments bias predates nDCG and
@@ -1131,7 +1137,7 @@ def validate(
 
 
 def log_swap_block(metrics: dict, top_k: int) -> None:
-    """One line contrasting persona-matched retrieval with the rotated-persona control.
+    """Contrast persona-matched retrieval with the rotated, mismatched-persona control.
 
     The delta *is* the personalisation signal. Near zero means the encoder is ignoring
     the ``Instruct:`` prefix and every headline gain is generic retrieval quality —

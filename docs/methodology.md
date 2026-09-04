@@ -146,11 +146,15 @@ DPO-only compute constraint.
     this is what separates them. The untrained baseline's `judged@5 = 1.0` is structural:
     the 20-document candidate pool was mined with the base encoder, so trained runs
     necessarily give some of that coverage back when they move outside the pool.
-  - **persona-swap (control)** — every val query re-scored under a rotated persona
-    against the same corpus embedding. Personas reach the retriever only through the
-    `Instruct:` prefix, so an encoder that ignores it improves every headline metric
-    while personalising nothing. Ranking with the wrong persona costs 0.1363 nDCG@5 under
-    the Luna-era val labels, so a persona-sensitive encoder has to degrade here.
+  - **Persona-mismatch (counterfactual swap) control.** The evaluator re-scores every
+    validation query under a rotated, valid persona different from the group's
+    ``persona_id``. "Mismatched" does not mean that the substituted persona is invalid.
+    It means that the query prefix no longer matches the persona whose fixed,
+    persona-conditioned teacher labels are being evaluated. The raw query, corpus
+    embedding, and labels stay fixed, so only the ``Instruct:`` prefix changes. A
+    persona-sensitive encoder should therefore lose agreement with the original labels.
+    Under the current Luna-era validation labels, this deliberate mismatch costs 0.1363
+    nDCG@5. The implementation is enabled by ``eval.persona_swap``.
   - **Recall@K / Hit@K / MRR** keep the binary set: the group's **top-3 docs by teacher
     score within the judged top-20 candidates**. Retained deliberately — nDCG ranges over
     the same graded distribution the KD loss is trained on, so a coarser, differently
@@ -292,7 +296,7 @@ Commit `ff90cf6` had to regenerate the scored files anyway: the same commit repl
 | Persona-blind ceiling | 0.8781 | 0.9573 |
 | Persona-matched ceiling | not separately recorded | 1.0000 |
 | Personalisation headroom | 0.122 | 0.0427 |
-| Cost of ranking with a rotated persona | 0.3369 nDCG@5 | 0.1363 nDCG@5 |
+| Cost of ranking with a mismatched persona | 0.3369 nDCG@5 | 0.1363 nDCG@5 |
 | Untrained baseline | nDCG@1 0.543; nDCG@5 0.548; Recall@5 0.3961; MRR 0.602; Hit@5 0.786 | nDCG@1 0.5895; nDCG@2 0.5445; nDCG@3 0.5596; nDCG@4 0.5727; nDCG@5 0.5861; Hit@1–5 0.6920 / 0.7645 / 0.8623 / 0.9058 / 0.9275; Recall@5 0.5640; MRR 0.7853; judged@5 1.0000 |
 
 Every Stage-1 number in any document must name its label era. Only Luna-era numbers may be compared with results under `models/ropg/*`.

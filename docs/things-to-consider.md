@@ -81,9 +81,9 @@ Context and the full evidence table live in [methodology](methodology.md), "Why
 
 - [ ] **Persona-contrastive negatives — the personalisation lever, deferred.**
   **Trigger: implement this if runs C and A plateau well below the persona-blind ceiling
-  *and* the persona-swap control shows the encoder ignoring the `Instruct:` prefix.** Not
-  before — at **nano-era nDCG@5 0.522** the dominant deficit is generic retrieval, not
-  persona-blindness.
+  *and* the persona-mismatch control shows the encoder ignoring the `Instruct:` prefix.**
+  Not before — at **nano-era nDCG@5 0.522** the dominant deficit is generic retrieval,
+  not persona-blindness.
   - *The gap.* `mnrl_loss` scores each query against **its own** negatives only
     (`torch.bmm` in `src/rl/ropg_kd.py`) — there are no cross-query in-batch negatives.
     Those negatives come from the tail of the judged list, i.e. plainly irrelevant
@@ -95,10 +95,11 @@ Context and the full evidence table live in [methodology](methodology.md), "Why
     **persona-blind** ranker nDCG@5 0.8781 and a perfect persona-matched one 1.0000.
     That 0.122 is the nano-era Stage-1 personalisation headroom. Under the Luna-era
     labels, the corresponding ceiling is 0.9573, the matched ceiling is 1.0000, and
-    headroom is 0.0427. Ranking with the wrong persona costs 0.3369 nDCG@5 in the
-    nano era and 0.1363 nDCG@5 in the Luna era — still non-trivial, though roughly
-    2.5× smaller — so the personas disagree at the Luna magnitude and the headroom is
-    real signal, not label noise.
+    headroom is 0.0427. Ranking with a mismatched persona costs 0.3369 nDCG@5 in
+    the nano era and 0.1363 nDCG@5 in the Luna era. Here "mismatched" means that the
+    substituted profile differs from the persona whose fixed teacher labels are being
+    evaluated, not that the substituted persona is invalid. The personas therefore
+    disagree at the Luna magnitude and the headroom is real signal, not label noise.
   - *The fix is data-level, not architectural.* Because negatives are per-row, this needs
     no sampler, collator, or loss change: append the other two personas' positives to
     each row's `negatives` inside `derive_triplets`, behind its own config flag and in a

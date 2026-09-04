@@ -124,9 +124,15 @@ Anchoring improves Recall@5 by 0.0616 and judged@5 by 0.1478. Both differences h
 
 Run D is significantly worse on nDCG@2 through nDCG@5, Recall@5, and judged@5. Its nDCG@5 is lower by 0.0435 and its Recall@5 is lower by 0.0701, both with Holm-adjusted $p=0.0013$. The query-only adapter with a frozen document tower does not beat joint adaptation here.
 
-## Persona-swap control
+## Persona-mismatch control (counterfactual swap)
 
-The persona-swap control rotates every query to the wrong persona while retaining the same corpus embedding. A persona-sensitive retriever should degrade under this control.
+The control re-renders every query with a different, valid persona while retaining the
+same corpus embedding and the labels for the original `(question, persona)` group.
+"Mismatched" means that the substituted profile differs from the persona that produced
+those fixed, persona-conditioned labels. It does not mean that the substituted persona
+is invalid. The raw query, corpus embedding, and labels stay fixed, so only the
+`Instruct:` prefix changes. A persona-sensitive retriever should lose agreement with the
+original labels under this counterfactual.
 
 Swapped minus matched nDCG@5 is:
 
@@ -137,7 +143,9 @@ Swapped minus matched nDCG@5 is:
 | C | -0.0053 | 1.0000 |
 | D | +0.0008 | 1.0000 |
 
-No run has a significant persona-swap effect on any metric. Run B is the best generic retriever, but these Stage 1 results do not demonstrate that the encoder uses the persona prefix.
+No run has a significant persona-mismatch effect on any metric. Run B is the best
+generic retriever, but these Stage 1 results do not demonstrate that the encoder uses
+the persona prefix.
 
 ## Artifacts
 

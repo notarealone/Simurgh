@@ -201,9 +201,9 @@ end-to-end part of 4 must be *grown*.
   0.5861 / 0.5640 / 0.7853 / 1.0000; B's Recall@5 deltas vs A/C/D +0.0616 / +0.0338 / +0.0701
   with Holm p 0.0013 / 0.0052 / 0.0013.
   Then the section's real point, in negation-then-assertion form: the gain is generic
-  retrieval, not personalization — all four persona-swap tests are null (p = 1.0000) although
-  ranking with a rotated persona costs 0.1363 nDCG@5 under the same labels, so the control has
-  power and still returns nothing.
+  retrieval, not personalization — all four persona-swap tests are null (p = 1.0000)
+  although ranking with a mismatched (rotated) persona costs 0.1363 nDCG@5 under the
+  same labels, so the control has power and still returns nothing.
   Required guards to state: `judged@5` must accompany every nDCG (a model surfacing
   unjudged-but-relevant chunks is punished for improving; epoch-0's 1.0 is structural);
   the metric shares the training labels' noise (circularity); CIs cover validation-query

@@ -231,11 +231,13 @@ CFG = {
     "eval": {
         "top_k": 5,
         "relevance_top_m": 3,  # relevant = top-m docs by teacher_score per group
-        # Persona-swap control: re-scores every val query under a rotated persona
-        # (crammer->scholar->steady->crammer) against the same corpus embedding and logs
-        # the matched-minus-swapped delta. Personas reach the retriever only through the
-        # `Instruct:` prefix, so an encoder that ignores it still improves every headline
-        # metric while personalising nothing. Cheap - the corpus embedding is reused.
+        # Persona-mismatch (counterfactual swap) control. Re-scores every val query under a
+        # rotated, valid persona different from the group's persona_id
+        # (crammer->scholar->steady->crammer) against the same corpus embedding. "Mismatched"
+        # means the substituted profile differs from the persona whose fixed,
+        # persona-conditioned teacher labels are being evaluated; it does not mean the
+        # substituted persona is invalid. Only the `Instruct:` prefix changes. Under the
+        # Luna-era labels, this deliberate mismatch costs 0.1363 nDCG@5.
         "persona_swap": True,
         # no-grad corpus + query encoding, so unconstrained by training batch_size;
         # rank 0 only, once per epoch.

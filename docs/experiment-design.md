@@ -231,14 +231,16 @@ of that coverage back when they move outside the pool. Recall@5 up with nDCG@5 d
 consistent both with "the graded middle got worse" and with "the retrieved set moved outside
 the judged pool"; `judged@5` is the only thing that separates them. Never report nDCG without it.
 
-**`persona_swap` is a required control.** Personas reach the retriever only through the
-`Instruct:` prefix, so an encoder that ignores that prefix improves every headline
-metric while personalising nothing. Each epoch re-scores every val query under a rotated
-persona; the matched-minus-swapped delta is the personalisation signal in isolation.
-Under the Luna-era labels, ranking with the wrong persona costs 0.1363 nDCG@5. All four
-executed runs returned a null swap effect (A/B/C/D: −0.0017 / −0.0043 / −0.0053 / +0.0008,
-all p = 1.0000), so the Stage-1 gain is generic retrieval quality and the personalisation
-claim rests entirely on Stage 2.
+**`persona_swap` is a required control.** The evaluator re-scores each validation query
+under a rotated, valid persona different from the group's `persona_id`. "Mismatched"
+means that the substituted profile differs from the persona whose fixed,
+persona-conditioned teacher labels remain in use. It does not mean that the substituted
+persona is invalid. The raw query, corpus embedding, and labels stay fixed, so only the
+`Instruct:` prefix changes. The matched-minus-swapped delta tests whether the encoder
+uses that prefix. Under the Luna-era labels, this deliberate mismatch costs 0.1363
+nDCG@5. All four executed runs returned a null swap effect (A/B/C/D: −0.0017 / −0.0043 /
+−0.0053 / +0.0008, all p = 1.0000), so the Stage-1 gain is generic retrieval quality
+and the personalisation claim rests entirely on Stage 2.
 
 **Ceiling, for calibration.** Computed from the Luna-era val teacher scores with no model
 involved: a perfect *persona-blind* ranker reaches nDCG@5 0.9573; a perfect
