@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 
@@ -14,10 +15,23 @@ REWRITER_SOURCE = (ROOT / "src" / "rag" / "rewriter.py").read_text(encoding="utf
 COMPARISON_SOURCE = (ROOT / "benchmarks" / "compare_dpo_rewriters.py").read_text(encoding="utf-8")
 
 # The notebook writes the small local package tree it needs. Pair generation is deliberately
-# absent, so inline its format constant instead of shipping a large, unused API pipeline.
+# absent, so inline its format constant instead of shipping a large, unused API pipeline. The
+# value is parsed out of the generator rather than retyped: a stale literal here rejects every
+# row of freshly generated data during preflight.
+GENERATOR_SOURCE = (ROOT / "src" / "data" / "gen_dpo_data.py").read_text(encoding="utf-8")
+(FORMAT_VERSION,) = [
+    node.value.value
+    for node in ast.parse(GENERATOR_SOURCE).body
+    if isinstance(node, ast.Assign)
+    and any(
+        isinstance(target, ast.Name) and target.id == "DPO_OUTPUT_FORMAT_VERSION"
+        for target in node.targets
+    )
+]
+assert isinstance(FORMAT_VERSION, int), "DPO_OUTPUT_FORMAT_VERSION must be an integer literal"
 TRAINER_WORKER = TRAINER_SOURCE.replace(
     "    from data.gen_dpo_data import DPO_OUTPUT_FORMAT_VERSION\n",
-    "    DPO_OUTPUT_FORMAT_VERSION = 1\n",
+    f"    DPO_OUTPUT_FORMAT_VERSION = {FORMAT_VERSION}\n",
 )
 assert TRAINER_WORKER != TRAINER_SOURCE, "DPO format-version import was not inlined"
 assert "from data.gen_dpo_data import" not in TRAINER_WORKER
@@ -95,7 +109,7 @@ Run order — one non-interactive pass, top to bottom:
 1. Package setup, source materialization, runtime config.
 2. Health and exact data preflight, once, on the first arm.
 3. Two-step DDP smoke, once, on the first arm.
-4. Full three-epoch training for every arm in `ARMS`, each isolated from the others.
+4. Full single-epoch training for every arm in `ARMS`, each isolated from the others.
 5. Deterministic Qwen outputs plus the cached temperature-zero Grok baseline.
 6. Gemini tournament, which runs only when every arm in `ARMS` has a promoted adapter.
 7. Export, status table, and `run_status.json`.
@@ -246,9 +260,20 @@ for key in (
     "DPO_EVAL_MODEL",
 ):
     print(f"{key} present: {bool(os.environ.get(key))}")
-print("Expected screening calls: 272 prompts x 10 pairs = 2720")
-print("Expected replication calls: 272 prompts x 5 pairs x 2 seeds = 2720")
-print("Total judge calls: 5440")
+# Derived from the shipped pair file, not retyped: the prompt count is one unique
+# (question_ref, persona_id) key per validation group and changes whenever pairs are regenerated.
+val_keys = {
+    (row["question_ref"], row["persona_id"])
+    for row in (
+        json.loads(line)
+        for line in Path(base_config["data"]["val_path"]).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    )
+}
+n_prompts = len(val_keys)
+print(f"Expected screening calls: {n_prompts} prompts x 10 pairs = {n_prompts * 10}")
+print(f"Expected replication calls: {n_prompts} prompts x 5 pairs x 2 seeds = {n_prompts * 10}")
+print(f"Total judge calls: {n_prompts * 20}")
 
 preflight_env = os.environ.copy()
 preflight_env.update({"WORLD_SIZE": str(n_gpus), "RANK": "0"})
@@ -298,7 +323,7 @@ smoke_command = [
 subprocess.run(smoke_command, check=True, env=os.environ.copy())
 """
     ),
-    markdown("## Full three-epoch DDP training"),
+    markdown("## Full single-epoch DDP training"),
     code(
         """import subprocess
 
@@ -328,7 +353,7 @@ for arm in ARMS:
         "--seed",
         str(SEED),
     ]
-    # An arm that dies must not cost the arms that already finished their three epochs.
+    # An arm that dies must not cost the arms that already finished their epoch.
     try:
         subprocess.run(full_command, check=True, env=os.environ.copy())
     except subprocess.CalledProcessError as error:

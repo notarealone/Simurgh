@@ -154,7 +154,7 @@ def _parse_question_ref(question_ref: str) -> tuple[str, str]:
 
 
 def load_validation_prompts(config: dict[str, Any]) -> tuple[list[PromptRecord], dict[str, str]]:
-    """Load 272 unique validation question/persona prompts and their judge-only gold fields."""
+    """Load every unique validation question/persona prompt and its judge-only gold fields."""
     train_path = Path(config["data"]["train_path"])
     val_path = Path(config["data"]["val_path"])
     train_pairs = load_pairs(train_path)
@@ -194,8 +194,8 @@ def load_validation_prompts(config: dict[str, Any]) -> tuple[list[PromptRecord],
     expected = split_report["validation"]["question_persona_keys"]
     if len(prompts) != expected:
         raise RuntimeError(f"Loaded {len(prompts)} prompts, split report expected {expected}")
-    if len(prompts) != 272:
-        raise ValueError(f"This frozen comparison requires 272 validation prompts, got {len(prompts)}")
+    if not prompts:
+        raise ValueError(f"{val_path} yielded no validation prompts")
     return prompts, {"train": _sha256(train_path), "validation": _sha256(val_path)}
 
 

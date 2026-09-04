@@ -4,14 +4,27 @@
 > PDFs go in `docs/references/pdfs/` using the same title-based kebab-case naming convention.
 >
 > The literature review centers on DPO and ROPG as the two methods this thesis builds
-> on directly. Foundational RAG and LaMP entries provide the pipeline and benchmark
-> context; the remaining entries support the persona schema and educational setting.
+> on directly. Foundational RAG, retrieval, query-rewriting, and LaMP entries provide the
+> pipeline and benchmark context; the remaining entries support the persona schema and
+> educational setting.
 
 | Paper | Year | Topic | Relevance | PDF |
 |---|---|---|---|---|
 | [Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks](retrieval-augmented-generation-for-knowledge-intensive-nlp-tasks.md) | 2020 | RAG foundations | Context paper: defines the parametric-generator and non-parametric-retriever decomposition used by the thesis | — |
+| [The Probabilistic Relevance Framework: BM25 and Beyond](the-probabilistic-relevance-framework-bm25-and-beyond.md) | 2009 | Lexical retrieval | Context paper: explains BM25's probabilistic basis, term-frequency saturation, and length normalization | — |
+| [Dense Passage Retrieval for Open-Domain Question Answering](dense-passage-retrieval-for-open-domain-question-answering.md) | 2020 | Supervised dense retrieval | Context paper: establishes the trainable dual-encoder pattern for passage retrieval | — |
+| [Unsupervised Dense Information Retrieval with Contrastive Learning](unsupervised-dense-information-retrieval-with-contrastive-learning.md) | 2022 | Unsupervised dense retrieval | Context paper: provides Contriever and a zero-shot contrastive retrieval baseline | — |
+| [Qwen3 Embedding: Advancing Text Embedding and Reranking Through Foundation Models](qwen3-embedding-advancing-text-embedding-and-reranking-through-foundation-models.md) | 2025 | Multilingual text embeddings | Implementation paper: documents the Qwen3-Embedding-0.6B backbone used by the thesis | — |
+| [Query Rewriting in Retrieval-Augmented Large Language Models](query-rewriting-in-retrieval-augmented-large-language-models.md) | 2023 | Query rewriting for RAG | Context paper: introduces Rewrite-Retrieve-Read and trains a rewriter from reader feedback | — |
+| [Precise Zero-Shot Dense Retrieval without Relevance Labels](precise-zero-shot-dense-retrieval-without-relevance-labels.md) | 2023 | Generated retrieval representations | Context paper: introduces HyDE's hypothetical-document bridge for zero-shot retrieval | — |
 | [LaMP: When Large Language Models Meet Personalization](lamp-when-large-language-models-meet-personalization.md) | 2024 | Personalized language-model benchmark | Context paper: establishes profile-based retrieval augmentation and the benchmark later used by ROPG | — |
+| [Training Language Models to Follow Instructions with Human Feedback](training-language-models-to-follow-instructions-with-human-feedback.md) | 2022 | RLHF / PPO | Foundation paper: defines the SFT, reward-model, and PPO pipeline that offline preference optimization replaces | — |
 | [Direct Preference Optimization: Your Language Model is Secretly a Reward Model](direct-preference-optimization-your-language-model-is-secretly-a-reward-model.md) | 2023 | Preference optimization / RL for generation | Core method of the literature review: reward-model-free, offline alternative to RLHF/PPO that trains a policy directly from preference pairs | [PDF](pdfs/direct-preference-optimization-your-language-model-is-secretly-a-reward-model.pdf) |
+| [WPO: Enhancing RLHF with Weighted Preference Optimization](wpo-enhancing-rlhf-with-weighted-preference-optimization.md) | 2024 | Off-policy preference optimization | DPO variant: reweights preference pairs to reduce data-policy distribution mismatch | — |
+| [Provably Robust DPO: Aligning Language Models with Noisy Feedback](provably-robust-dpo-aligning-language-models-with-noisy-feedback.md) | 2024 | Noisy preference labels | DPO variant: corrects the loss under a uniform label-flip model | — |
+| [Provably Mitigating Overoptimization in RLHF](provably-mitigating-overoptimization-in-rlhf-your-sft-loss-is-implicitly-an-adversarial-regularizer.md) | 2024 | Regularized preference optimization | RPO source: adds supervised likelihood on preferred responses to the preference loss | — |
+| [LoRA: Low-Rank Adaptation of Large Language Models](lora-low-rank-adaptation-of-large-language-models.md) | 2022 | Parameter-efficient fine-tuning | Foundation paper: freezes base weights and trains low-rank updates | — |
+| [QLoRA: Efficient Finetuning of Quantized LLMs](qlora-efficient-finetuning-of-quantized-llms.md) | 2023 | Quantized parameter-efficient fine-tuning | Implementation basis: trains LoRA adapters through a frozen four-bit base model | — |
 | [Optimization Methods for Personalizing Large Language Models through Retrieval Augmentation](optimization-methods-for-personalizing-large-language-models-through-retrieval-augmentation.md) | 2024 | Personalized retriever optimization | Core method of the literature review: first to train the retriever from the downstream personalized objective (ROPG-RL / ROPG-KD, RSPG selection) | [PDF](pdfs/optimization-methods-for-personalizing-large-language-models-through-retrieval-augmentation.pdf) |
 | [Two Tales of Persona in LLMs: A Survey of Role-Playing and Personalization](two-tales-of-persona-in-llms-a-survey-of-role-playing-and-personalization.md) | 2024 | Persona survey | Persona-schema reference for [`personas.md`](../personas.md): the role-playing vs personalization split | — |
 | [Simulating Students with Large Language Models: A Review](simulating-students-with-large-language-models-a-review-of-architecture-mechanisms-and-role-modelling-in-education-with-generative-ai.md) | 2025 | Student-simulation review | Persona-schema reference for [`personas.md`](../personas.md): persona-axis taxonomy and validity pitfalls | — |

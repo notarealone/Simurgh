@@ -1,27 +1,130 @@
 # Literature Review
 
-> A focused review of the two works this thesis builds on directly. One reference note
-> per paper lives in [`references/`](references/INDEX.md); this file synthesizes them into
-> an argument. The review is deliberately narrowed to these two methods — the ones the
-> thesis extends — rather than a broad RAG/RL survey. Persona-modelling references are
-> kept separately for [`personas.md`](personas.md) and are out of scope here.
+> A focused review of the methods that determine this thesis's pipeline: foundational
+> RAG, lexical and dense retrieval, query rewriting, DPO, and personalized retriever
+> optimization. One reference note per paper lives in
+> [`references/`](references/INDEX.md). The review is intentionally selective rather than
+> a general RAG or reinforcement-learning survey.
 
-The thesis optimizes a retrieval-augmented generation (RAG) pipeline with reinforcement
-learning for personalization. Two lines of prior work anchor that goal, one on each side
-of the pipeline:
+The thesis optimizes a retrieval-augmented generation (RAG) pipeline for Persian
+educational personalization. Three lines of prior work define the design:
 
-1. **Aligning a model from preferences** — *Direct Preference Optimization* (DPO), a
-   reward-model-free way to train a policy directly from preference pairs.
-2. **Optimizing the retriever for personalization** — the *ROPG / RSPG* methods on the
-   LaMP benchmark, the first work to train a retriever from the downstream
-   personalized-generation objective rather than from generic relevance.
+1. **Retrieving external evidence** — foundational RAG and the lexical/dense methods that
+   select evidence before generation.
+2. **Transforming the query** — rewriting methods that bridge the user's wording and the
+   representation that retrieves useful documents.
+3. **Learning from downstream feedback** — DPO for offline preference learning and
+   ROPG/RSPG for optimizing a retriever against a personalized generation objective.
 
-The two are complementary: DPO is a method for turning preference data into an aligned
-generation policy; ROPG is a method for turning a downstream task signal into a better
-retriever. Together they cover the "how to train from preferences/feedback" and "how to
-personalize retrieval" questions that a personalized RAG system has to answer.
+These lines play different roles. RAG defines the decomposition; BM25, DPR, and
+Contriever provide retrieval baselines and training patterns; Rewrite-Retrieve-Read and
+HyDE show how generated text can intervene before retrieval; DPO and ROPG explain how
+feedback can train the two components selected in this thesis. The review asks of each
+method what it optimizes, how it works, and why its evidence does not directly establish
+learner-conditioned retrieval over a shared Persian corpus.
 
 ---
+## Retrieval-Augmented Generation and Retrieval Foundations
+
+### Pipeline decomposition
+
+Lewis et al. (2020) define RAG as the combination of parametric memory in a
+sequence-to-sequence generator and non-parametric memory in a dense document index. A
+retriever assigns probabilities to passages for an input, and the generator conditions
+its output on the input and retrieved passage. RAG-Sequence uses one latent passage for
+an entire output sequence, whereas RAG-Token permits the latent passage to vary across
+generated tokens. Both marginalize over a truncated top-*K* set instead of treating the
+single first-ranked passage as certain.
+
+This decomposition makes the evidence store explicit and updateable, but the original
+objective concerns task relevance and factual generation. It does not distinguish two
+passages that answer the same question but differ in pedagogical suitability. Simurgh
+therefore adopts the retrieval-before-generation boundary while treating
+learner-conditioned document utility as a separate quantity.
+→ [`retrieval-augmented-generation-for-knowledge-intensive-nlp-tasks`](references/retrieval-augmented-generation-for-knowledge-intensive-nlp-tasks.md)
+
+### Lexical and dense retrieval
+
+Robertson and Zaragoza (2009) place BM25 in the probabilistic relevance framework. BM25
+scores exact query-term matches using inverse document frequency, saturating term
+frequency, and document-length normalization. It is efficient over an inverted index and
+transparent about why a document receives a score. Those same properties expose its
+boundary: a relevant passage with no matching indexed term receives no semantic credit,
+and orthographic variation changes the observed matches. This makes BM25 both a useful
+baseline and a direct diagnostic for Persian character and token normalization.
+→ [`the-probabilistic-relevance-framework-bm25-and-beyond`](references/the-probabilistic-relevance-framework-bm25-and-beyond.md)
+
+Karpukhin et al. (2020) replace sparse term matching with DPR's supervised dual encoder.
+Question and passage encoders produce dense vectors, their inner product gives the
+retrieval score, and positive passages are contrasted with in-batch or BM25-derived
+negatives. Passage vectors can be precomputed, preserving efficient corpus search. The
+paper reports 9–19 percentage-point absolute gains over a strong Lucene-BM25 baseline in
+top-20 passage retrieval accuracy across its open-domain QA datasets. The evidence shows
+the value of learned semantic matching, but it depends on English QA relevance labels and
+does not demonstrate learner-conditioned utility.
+→ [`dense-passage-retrieval-for-open-domain-question-answering`](references/dense-passage-retrieval-for-open-domain-question-answering.md)
+
+Izacard et al. (2022) address the label requirement with Contriever, which learns dense
+representations through unsupervised contrastive training on paired crops and in-batch
+negatives. In its unsupervised BEIR evaluation, Contriever exceeds BM25 on Recall@100 for
+11 of 15 datasets and also supports multilingual and cross-lingual transfer. Contriever
+therefore provides a stronger zero-shot starting point than assuming a dense retriever
+must be trained in-domain. Its limitation remains the objective: general semantic
+similarity is neither evidence of pedagogical usefulness nor evidence that a profile
+changes the ranking.
+→ [`unsupervised-dense-information-retrieval-with-contrastive-learning`](references/unsupervised-dense-information-retrieval-with-contrastive-learning.md)
+
+Zhang et al. (2025) provide the concrete backbone used in this thesis through the Qwen3
+Embedding family. The series derives embedding and reranking models at 0.6B, 4B, and 8B
+scales from Qwen3 foundation models and combines unsupervised pretraining with supervised
+multilingual fine-tuning. Simurgh uses Qwen3-Embedding-0.6B because it preserves the
+family's multilingual and instruction-aware retrieval interface at the smallest released
+scale. This is an implementation choice, not evidence of Persian educational quality:
+the checkpoint must still be evaluated before and after in-domain training, and profile
+sensitivity must be tested separately.
+→ [`qwen3-embedding-advancing-text-embedding-and-reranking-through-foundation-models`](references/qwen3-embedding-advancing-text-embedding-and-reranking-through-foundation-models.md)
+
+| Method | Representation | Supervision | Main role here | Unresolved boundary |
+|---|---|---|---|---|
+| BM25 | Sparse terms | None | Transparent lexical baseline | No semantic match without shared terms |
+| DPR | Dense vectors | Labeled question-passage pairs | Supervised dual-encoder pattern | Labels encode relevance, not learner utility |
+| Contriever | Dense vectors | Unsupervised contrastive pairs | Zero-shot dense starting point | Similarity does not establish personalization |
+| Qwen3-Embedding-0.6B | Dense vectors | Multistage multilingual training | Thesis retrieval backbone | Benchmark capability does not establish in-domain or profile-dependent quality |
+
+### Query rewriting before retrieval
+
+Ma et al. (2023) make the query an explicit trainable interface in
+Rewrite-Retrieve-Read. A language model first rewrites the input, a search system
+retrieves evidence for that rewrite, and a frozen reader produces the answer. Their
+trainable variant transfers reader feedback to a smaller rewriter through reinforcement
+learning. The method changes retrieval without modifying the retriever or reader;
+however, its reward measures downstream QA performance rather than learner fit, and its
+evidence comes from English QA with web search.
+→ [`query-rewriting-in-retrieval-augmented-large-language-models`](references/query-rewriting-in-retrieval-augmented-large-language-models.md)
+
+Gao et al. (2023) propose a different bridge in HyDE. Instead of producing a search-style
+query, an instruction-following model generates a hypothetical relevant document;
+Contriever embeds that generated document and retrieves nearby real passages. The
+hypothetical text may contain false statements, so it is used only as a representation,
+not as evidence supplied directly to the answer. HyDE shows that document-shaped
+generation can reduce the query-document representation gap without relevance labels,
+but supplies no rule for how learner characteristics should change that representation.
+→ [`precise-zero-shot-dense-retrieval-without-relevance-labels`](references/precise-zero-shot-dense-retrieval-without-relevance-labels.md)
+
+Together, these works justify separating retrieval, rewriting, and generation, but none
+tests whether a profile-dependent rewrite or score changes document utility for learners
+who all search the same corpus. That distinction between generic retrieval improvement
+and personalization is the boundary carried into the thesis experiments.
+
+
+### RLHF and PPO
+
+Ouyang et al. (2022) provide the practical RLHF lineage used here: supervised fine-tuning,
+reward-model training from ranked responses, and PPO optimization of the policy under a
+penalty to a frozen reference. This pipeline can align generation with preferences, but it
+requires online policy samples, a separate reward model, and a value model. Those costs
+motivate the offline alternative below.
+→ [`training-language-models-to-follow-instructions-with-human-feedback`](references/training-language-models-to-follow-instructions-with-human-feedback.md)
 
 ## Preference Optimization from Pairwise Data — DPO
 
@@ -61,6 +164,32 @@ policy exposes an implicit reward `β·log(π_θ/π_ref)` that can be read off f
 filtering. The main caveats are off-policy/distribution-shift risk (the preference data may
 not match the live policy) and sensitivity to the choice of reference policy.
 → [`direct-preference-optimization-your-language-model-is-secretly-a-reward-model`](references/direct-preference-optimization-your-language-model-is-secretly-a-reward-model.md)
+
+### DPO variants used in the thesis
+
+Three extensions address distinct DPO failure modes. WPO reweights offline pairs by their
+probability under the current policy, targeting the mismatch between the data-generating
+model and the trained policy (Zhou et al., 2024). Robust DPO corrects the loss under an
+assumed uniform preference-label flip rate (Ray Chowdhury et al., 2024). RPO adds supervised
+negative log-likelihood on preferred responses, which prevents a model from improving the
+preference margin solely by making both responses less likely (Liu et al., 2024).
+
+These changes are alternatives only in part. WPO changes pair weights, robust DPO changes
+the noise model, and RPO adds an anchor; the thesis therefore applies the RPO anchor to
+each objective arm rather than treating it as a fourth competing arm.
+→ [`wpo-enhancing-rlhf-with-weighted-preference-optimization`](references/wpo-enhancing-rlhf-with-weighted-preference-optimization.md)
+→ [`provably-robust-dpo-aligning-language-models-with-noisy-feedback`](references/provably-robust-dpo-aligning-language-models-with-noisy-feedback.md)
+→ [`provably-mitigating-overoptimization-in-rlhf`](references/provably-mitigating-overoptimization-in-rlhf-your-sft-loss-is-implicitly-an-adversarial-regularizer.md)
+
+### Parameter-efficient adaptation
+
+LoRA freezes the pretrained model and learns low-rank updates in selected Transformer
+layers (Hu et al., 2022). QLoRA retains that update rule while storing the frozen base model
+in four-bit form and backpropagating into the adapters (Dettmers et al., 2023). The thesis
+uses LoRA for both trainable components and the QLoRA form for the Qwen3-4B rewriter; this
+choice reduces memory use but does not itself establish equal quality to full fine-tuning.
+→ [`lora-low-rank-adaptation-of-large-language-models`](references/lora-low-rank-adaptation-of-large-language-models.md)
+→ [`qlora-efficient-finetuning-of-quantized-llms`](references/qlora-efficient-finetuning-of-quantized-llms.md)
 
 ## Retriever Optimization for Personalization — ROPG / LaMP
 
