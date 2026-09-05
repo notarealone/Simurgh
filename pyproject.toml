@@ -23,6 +23,7 @@ dependencies = [
 dev = [
     "ruff>=0.11",
     "ipykernel>=6.0",
+    "matplotlib",
 ]
 # Dense retrieval (BGE-M3 + FAISS). Not installed by default because sentence-transformers
 # pulls torch (~2GB with CUDA on Linux). On Kaggle torch is pre-installed; install this

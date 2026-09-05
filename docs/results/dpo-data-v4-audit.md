@@ -15,8 +15,9 @@ until now was an assumption. Against that, the `scholar` persona appears as the 
 audit surfaces.
 
 This is an audit of shipped artifacts, not an experiment. It reports what the generator
-produced; whether training on it works is [dpo-arms-seed42-v1](dpo-arms-seed42-v1.md)'s
-successor's question.
+produced; whether training on it works is answered in
+[dpo-arms-seed42-v2](dpo-arms-seed42-v2.md) — it does, and the cross-persona rows are the
+component that made the rewriter persona-sensitive.
 
 ## Inputs
 

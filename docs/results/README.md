@@ -12,7 +12,8 @@ Committed results:
 
 - [stage1-ropg-runB](stage1-ropg-runB.md) — Stage 1 ROPG, selected run.
 - [ropg-runs-comparison-v1](ropg-runs-comparison-v1.md) — Stage 1 run comparison.
-- [dpo-arms-seed42-v1](dpo-arms-seed42-v1.md) — Stage 2 DPO/WPO/robust screening at seed 42; no arm promoted.
+- [dpo-arms-seed42-v1](dpo-arms-seed42-v1.md) — Stage 2 DPO/WPO/robust screening at seed 42 on v3 pair data; no arm promoted.
+- [dpo-arms-seed42-v2](dpo-arms-seed42-v2.md) — the same three arms rerun on v4 pair data with the repaired trainer; `wpo` beats the untrained policy, with figures under `figures/dpo-v4-vs-v3/`.
 - [judge-agreement-luna-gemini-v1](judge-agreement-luna-gemini-v1.md) — how far the Luna preference labels and the Gemini tournament judge agree, and the noise floor that implies.
 - [judge-noise-luna-v1](judge-noise-luna-v1.md) — Luna replicate noise at `temperature: 0`, and the `filters.min_margin` calibration it produced.
 - [dpo-data-v4-audit](dpo-data-v4-audit.md) — as-built audit of the fourth DPO pair generation (second schema): yield, label noise, persona skew, cleanliness.

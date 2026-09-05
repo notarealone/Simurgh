@@ -52,6 +52,27 @@ MRR +0.0685; judged@5 −0.1312. `judged@5` starts at 1.0 by construction becaus
 the candidate pool was mined with the base encoder, so its decline is expected and
 is not a regression.
 
+![nDCG@K and Hit@K ladders](figures/ropg-runs-v1/metric_ladder.png)
+
+The ladder shows where each arm's advantage lives. Run C's lead is concentrated at the
+shallow cut-offs, all four arms converge between $K=4$ and $K=5$, and Run D sits a visible
+band below the other three at every $K$. The baseline's dip at $K=2$ is a property of the
+nDCG normalizer over graded labels, not a scoring bug: it reproduces identically in all four
+logs because the epoch-0 evaluation is shared.
+
+![Paired differences against the baseline and against Run B](figures/ropg-runs-v1/headline_deltas.png)
+
+Left: every arm beats the untrained encoder on nDCG@5 and MRR by a wide margin whose
+interval stays clear of zero, while Recall@5 separates them — Run A (+0.0205,
+$[-0.0145, +0.0556]$) and Run D (+0.0121, $[-0.0242, +0.0471]$) cannot be distinguished from
+the untrained encoder there. Those two arms bought graded ranking quality without retrieving
+more of the relevant set; only Run B (+0.0821) and Run C (+0.0483) did both.
+Right: Run B's advantage over each rival, starred where the Holm-adjusted $p$ falls below
+0.05. Six of the eighteen intervals clear that bar, and Recall@5 is the only metric where all
+three comparisons do — which is the whole basis of the selection decision. The other three
+stars are Run B's coverage advantage over A and D on `judged@5`, plus its nDCG@5 advantage
+over D.
+
 ## Metric definitions
 
 ### nDCG@K
@@ -108,6 +129,27 @@ Training and validation loss measure how closely the student reproduces the teac
 
 Validation loss is comparable within A versus B and within C versus D. It is not comparable between an unfiltered and filtered arm because those arms score different validation triplet sets. The retrieval metrics remain paired-comparable because all four runs evaluate the same 276 scored query groups against the same corpus.
 
+Both caveats are measurable across the twelve trained checkpoints:
+
+![Validation loss and judged@5 against Recall@5](figures/ropg-runs-v1/loss_vs_retrieval.png)
+
+Validation loss carries essentially no information about retrieval quality here
+(Pearson $r = -0.13$): Run C reaches the lowest loss of any checkpoint at epoch 2 and still
+retrieves less of the relevant set than Run B at every epoch. `judged@5`, by contrast, tracks
+Recall@5 at $r = +0.83$. That correlation is the ranking's main threat to validity — the
+evaluator awards no gain to unjudged documents, so an arm that keeps its results inside the
+teacher-judged pool is rewarded twice. Run B leads on both axes, and this design cannot
+separate "retrieves more relevant documents" from "drifts less far from the pool the labels
+cover." Judging a fresh candidate pool mined with each trained encoder would settle it.
+
+![Per-epoch trajectories](figures/ropg-runs-v1/epoch_trajectories.png)
+
+Training loss more than halves between epoch 1 and epoch 3 in every arm while Recall@5 —
+the quantity `src/rl/ropg_kd.py::is_better` selects on — peaks at epoch 1 for B, C and D and
+at epoch 2 for A, then declines. Circles mark each run's selected checkpoint. Three epochs
+were budgeted and roughly one was useful; the selector, not the loss, is what kept the
+extra epochs from being promoted.
+
 ## Pairwise interpretation
 
 ### Run B versus Run C
@@ -123,6 +165,48 @@ Anchoring improves Recall@5 by 0.0616 and judged@5 by 0.1478. Both differences h
 ### Run B versus Run D
 
 Run D is significantly worse on nDCG@2 through nDCG@5, Recall@5, and judged@5. Its nDCG@5 is lower by 0.0435 and its Recall@5 is lower by 0.0701, both with Holm-adjusted $p=0.0013$. The query-only adapter with a frozen document tower does not beat joint adaptation here.
+
+## Where the gains land
+
+### Per persona
+
+The 276 validation rows split evenly into 92 per persona, so the headline numbers can be
+decomposed without changing the evaluation.
+
+![Per-persona best-checkpoint scores](figures/ropg-runs-v1/per_persona.png)
+
+| Recall@5 | Baseline | Run A | Run B | Run C | Run D |
+|---|---:|---:|---:|---:|---:|
+| crammer | 0.5797 | 0.5507 | **0.6159** | 0.5870 | 0.5471 |
+| scholar | 0.5543 | 0.5942 | **0.6630** | 0.6196 | 0.5616 |
+| steady | 0.5580 | 0.6087 | **0.6594** | 0.6304 | 0.6196 |
+
+The gains are not shared equally. On the crammer persona, Run A (−0.0290) and Run D
+(−0.0326) end up **below the untrained encoder**, and Run B's crammer gain (+0.0362) is a
+third of its scholar gain (+0.1087). Run A and Run D beat the baseline overall only because
+scholar and steady carry them.
+
+This is not a personalization effect, and it is not query difficulty either: all three
+personas score the *same* 92 question texts (verified — the `query` field is identical
+across the three rows of every group; only the `Instruct:` prefix and the labels differ).
+What differs is the labels. Recall, Hit and MRR binarize the teacher's top
+`relevance_top_m` = 3 chunks, so the denominator is 3 for every persona, but the teacher was
+markedly less decisive on crammer: a mean judged score of 0.0712 against 0.0909 and 0.0906,
+and only 1.04 chunks per query clearing 0.5 against 1.48 and 1.50. Two of crammer's three
+"relevant" chunks are therefore near-ties, so its Recall@5 rewards a distinction the labels
+barely make. The crammer column measures label sharpness as much as retrieval.
+
+### Query level
+
+![Per-query distribution of Run B's gain](figures/ropg-runs-v1/per_query_delta.png)
+
+Run B's +0.1446 nDCG@5 is a majority effect, not a uniform one: 176 of 276 queries improve,
+40 are unchanged, and **60 rank worse than the untrained encoder**, some by more than 0.4
+nDCG. The median gain (+0.0341) is far below the mean, so a minority of large winners
+carries the average. Recall@5 is coarser by construction — every query has exactly three
+binary relevant chunks (`relevance_top_m: 3`), so ±1/3 is the smallest possible move and 114
+queries land exactly on zero. Reporting means alone would present a broad improvement where
+the data shows a skewed one.
 
 ## Persona-mismatch control (counterfactual swap)
 
@@ -147,13 +231,55 @@ No run has a significant persona-mismatch effect on any metric. Run B is the bes
 generic retriever, but these Stage 1 results do not demonstrate that the encoder uses
 the persona prefix.
 
+![Persona-mismatch control](figures/ropg-runs-v1/persona_swap.png)
+
+The left panel shows why the table's four rows are an equivalence result rather than an
+absence of evidence: every interval is narrow and centred on zero, so the effect is not
+merely unproven but bounded — at most about one nDCG@5 point in either direction for any
+trained arm.
+
+The right panel adds something the pooled table hides. The **untrained** encoder has a large
+per-persona prefix effect that happens to cancel: swapping the prefix is worth +0.0764 nDCG@5
+on crammer rows and −0.0689 on steady rows, averaging to a +0.0017 that reads as a null.
+That is a prefix *bias* rather than personalization — the base `Instruct:` prefix for crammer
+retrieves better against every persona's labels — and all four trained arms shrink it to
+within ±0.018. Training therefore did not add persona sensitivity; it flattened a
+pre-existing prefix artifact. That is the honest reading of Stage 1: persona conditioning
+has to come from the Stage 2 rewriter, not from this encoder.
+
+## Figures
+
+All seven figures are committed under `figures/ropg-runs-v1/` and regenerate from the four
+`training_log.json` files with:
+
+```bash
+python benchmarks/plot_ropg_comparison.py --runs models/ropg --out docs/results/figures/ropg-runs-v1
+```
+
+The script reuses `compare_runs.py`'s `paired_stats` and `holm`, asserts epoch-0 parity
+across the four logs before plotting anything, and writes every plotted number to
+`figures/ropg-runs-v1/stats.json`. Bootstrap CIs and permutation $p$-values use 10,000
+resamples at seed 42, matching the Markdown reports.
+
+| Figure | What it answers |
+|---|---|
+| `metric_ladder.png` | Where in the ranking each arm's advantage sits |
+| `headline_deltas.png` | Which differences survive paired CIs and Holm correction |
+| `epoch_trajectories.png` | Whether the third epoch was worth training |
+| `loss_vs_retrieval.png` | Whether loss or judged coverage explains the ranking |
+| `per_persona.png` | Who the gains belong to, and how sharp their labels are |
+| `per_query_delta.png` | How the mean gain is distributed over queries |
+| `persona_swap.png` | Whether the encoder reads the persona prefix |
+
 ## Artifacts
 
-The pairwise reports, persona-swap reports, and plots are generated under the ignored local directory `models/ropg/comparisons/`:
+The pairwise reports and persona-swap reports are generated under the ignored local
+directory `models/ropg/comparisons/`:
 
-- `best_metrics.svg`
-- `training_curves.svg`
 - `runA_vs_runB.md` through `runC_vs_runD.md`
 - `runA_persona_swap.md` through `runD_persona_swap.md`
+- `best_metrics.svg`, `training_curves.svg` (superseded by the committed figures above)
 
-`models/` is excluded by `.gitignore`. This document contains the committed summary; model weights, checkpoints, raw logs, and local plots remain uncommitted.
+`models/` is excluded by `.gitignore`, so model weights, checkpoints, and raw logs remain
+uncommitted. This document plus `figures/ropg-runs-v1/` is the committed record; the figures
+regenerate from the local run tree with the command above.

@@ -1,5 +1,10 @@
 # DPO rewriter arms, seed 42 v1
 
+> **Superseded by [dpo-arms-seed42-v2](dpo-arms-seed42-v2.md)**, which reruns these three
+> arms on v4 pair data with the three changes below applied. The diagnosis in this document
+> held: likelihood displacement was the binding failure, and removing it moved `wpo` above
+> the untrained policy.
+
 ## Decision
 
 No arm is promoted. Stage 2 DPO as configured for this screening run does not improve the
@@ -235,9 +240,10 @@ Two structural questions remain open and matter more than any hyperparameter:
 
 | Artifact | Location |
 |---|---|
-| Tournament summary and per-job judgments | `data/rl/dpo_rewriter_comparisons/seed-42/` |
-| Per-arm metrics and manifests | `data/rl/dpo_rewriter_runs/{arm}/seed-42/` |
+| Tournament summary and per-job judgments | `models/dpo/oldData-dpo-seed-42/comparisons/seed-42/` |
+| Per-arm metrics and manifests | `models/dpo/oldData-dpo-seed-42/runs/{arm}/seed-42/` |
 | Notebook that produced the run | `notebooks/train_dpo.ipynb`, built by `notebooks/build_train_dpo.py` |
 
-Model weights, checkpoints and raw generation dumps are not committed. This document is the
-committed summary.
+`models/` is gitignored, so the run tree above — weights, checkpoints, judgment dumps — is
+local only. This document is the committed summary; the v2 comparison additionally commits
+regenerable figures and a `stats.json`.
