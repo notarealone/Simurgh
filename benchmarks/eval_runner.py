@@ -352,20 +352,24 @@ def validate(config: dict[str, Any], *, probe: bool = True) -> dict[str, Any]:
         errors.append(f"exactly one arm must set profile: false; found {n_unprofiled}")
     report["arms"] = names
 
+    # Unsloth's 4-bit loader rewrites the base id it records: a LoRA trained from
+    # `Qwen/Qwen3-4B` with `load_in_4bit` reports `unsloth/qwen3-4b-unsloth-bnb-4bit`.
+    # Match the model family, which is what the check is actually for; an exact repo id
+    # would reject the very adapter `rag.rewriter.DPORewriter` then loads.
     adapters = {
-        "ropg_adapter_path": ("Qwen3-Embedding-0.6B", config["artifacts"]["ropg_adapter_path"]),
-        "dpo_adapter_path": ("Qwen3-4B", config["artifacts"]["dpo_adapter_path"]),
+        "ropg_adapter_path": ("qwen3-embedding-0.6b", config["artifacts"]["ropg_adapter_path"]),
+        "dpo_adapter_path": ("qwen3-4b", config["artifacts"]["dpo_adapter_path"]),
     }
     report["adapters"] = {}
-    for label, (expected_suffix, raw_path) in adapters.items():
+    for label, (family, raw_path) in adapters.items():
         adapter_dir = Path(raw_path)
         base_model = _adapter_base_model(adapter_dir)
         if base_model is None:
             errors.append(f"{label}: no readable adapter_config.json under {adapter_dir}")
-        elif not base_model.endswith(expected_suffix):
+        elif family not in base_model.lower():
             errors.append(
                 f"{label}: adapter at {adapter_dir} records base model {base_model!r}, "
-                f"which does not end with {expected_suffix!r}"
+                f"which is not a {family} model"
             )
         report["adapters"][label] = {"path": str(adapter_dir), "base_model": base_model}
 

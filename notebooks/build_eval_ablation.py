@@ -113,7 +113,7 @@ rows the run expects, is derived from the config.
     code(PIP_COMMAND),
     markdown("## Runtime knobs — the only cell to edit"),
     code(
-        '''# Every override defaults to None, meaning "use the embedded YAML".
+        """# Every override defaults to None, meaning "use the embedded YAML".
 DATA_ROOT = "/kaggle/input/datasets/alirezahsn/simurgh-data"
 ROPG_ADAPTER_DIR = None      # set to a path to skip discovery for the ROPG checkpoint
 DPO_ADAPTER_DIR = None       # set to a path to skip discovery for the DPO adapter
@@ -124,7 +124,7 @@ SMOKE_LIMIT = 2              # questions in the smoke run
 
 # Replicates are repetitions of identical remote calls, not seeds: they measure endpoint
 # sampling variance and nothing else. One replicate makes no variance claim at all.
-'''
+"""
     ),
     markdown("## Secrets and paths"),
     code(
@@ -189,8 +189,12 @@ def _candidates(leaf_name):
     return found
 
 
-def discover(leaf_name, base_suffix, require_segment=None, forbid_segments=()):
-    """Return the single adapter directory whose recorded base model matches."""
+def discover(leaf_name, base_family, require_segment=None, forbid_segments=()):
+    """Return the single adapter directory whose recorded base model matches.
+
+    Matching is on the model family, not the exact repo id: Unsloth's 4-bit loader records
+    `unsloth/qwen3-4b-unsloth-bnb-4bit` for a LoRA trained from `Qwen/Qwen3-4B`.
+    """
     found = _candidates(leaf_name)
     validated = []
     for directory, base in found:
@@ -199,13 +203,13 @@ def discover(leaf_name, base_suffix, require_segment=None, forbid_segments=()):
             continue
         if parts & set(forbid_segments):
             continue
-        if str(base).endswith(base_suffix):
+        if base_family in str(base).lower():
             validated.append(directory)
     if len(validated) != 1:
         for directory, base in found:
             print(f"  candidate {directory} -> {base}")
         raise RuntimeError(
-            f"Expected exactly one {leaf_name} adapter on {base_suffix}, found "
+            f"Expected exactly one {leaf_name} adapter on {base_family}, found "
             f"{len(validated)}: {validated}"
         )
     return validated[0]
@@ -214,14 +218,14 @@ def discover(leaf_name, base_suffix, require_segment=None, forbid_segments=()):
 if ROPG_ADAPTER_DIR:
     ROPG_ADAPTER = Path(ROPG_ADAPTER_DIR)
 else:
-    ROPG_ADAPTER = discover("checkpoint-best", "Qwen3-Embedding-0.6B")
+    ROPG_ADAPTER = discover("checkpoint-best", "qwen3-embedding-0.6b")
 # The DPO family trained three arms into sibling directories. Only the plain `dpo` arm is
 # the promoted rewriter; wpo and robust_dpo carry the same leaf name and the same base model.
 if DPO_ADAPTER_DIR:
     DPO_ADAPTER = Path(DPO_ADAPTER_DIR)
 else:
     DPO_ADAPTER = discover(
-        "dpo_best", "Qwen3-4B", require_segment="dpo", forbid_segments=("wpo", "robust_dpo")
+        "dpo_best", "qwen3-4b", require_segment="dpo", forbid_segments=("wpo", "robust_dpo")
     )
 print("ROPG adapter:", ROPG_ADAPTER)
 print("DPO adapter: ", DPO_ADAPTER)
@@ -283,7 +287,7 @@ print("Expected keys — full:", FULL_EXPECTED, "| smoke:", SMOKE_EXPECTED)
     ),
     markdown("## Preflight — no CUDA, no model weights"),
     code(
-        '''import subprocess
+        """import subprocess
 import sys
 
 import torch
@@ -306,7 +310,7 @@ subprocess.run(
     env=os.environ.copy(),
 )
 print("Derived expected keys:", FULL_EXPECTED)
-'''
+"""
     ),
     markdown("## Two-question smoke, both ranks"),
     code(
@@ -407,7 +411,7 @@ check_rows(load_results(smoke_config), smoke_config, SMOKE_EXPECTED)
     ),
     markdown("## Full run"),
     code(
-        '''import subprocess
+        """import subprocess
 
 full_command = [
     "torchrun",
@@ -430,11 +434,11 @@ except subprocess.CalledProcessError as error:
     ) from error
 
 check_rows(load_results(config), config, FULL_EXPECTED)
-'''
+"""
     ),
     markdown("## Inspect the outputs"),
     code(
-        '''import csv
+        """import csv
 
 output_dir = Path(config["output_dir"])
 manifest = json.loads((output_dir / "run_manifest.json").read_text(encoding="utf-8"))
@@ -460,7 +464,7 @@ def show(name, keep=lambda row: True, limit=60):
 show("summary.csv", lambda row: row["persona"] in ("all", "all_train", "all_test"))
 show("paired_deltas.csv", lambda row: row["judge"] == "primary")
 show("judge_agreement.csv")
-'''
+"""
     ),
     markdown(
         """## If something failed
@@ -562,8 +566,7 @@ exec(compile(profiles_source, "profiles.py", "exec"), namespace)
 assert set(inlined_config["personas"]) <= set(namespace["PERSONAS"])
 assert isinstance(inlined_config["replicates"], list) and inlined_config["replicates"]
 assert all(
-    isinstance(r, int) and not isinstance(r, bool) and r > 0
-    for r in inlined_config["replicates"]
+    isinstance(r, int) and not isinstance(r, bool) and r > 0 for r in inlined_config["replicates"]
 )
 
 # Row counts must be derived from the resolved config. A literal count in an assertion is a
@@ -583,9 +586,7 @@ default_full = (
     * len(inlined_config["arms"])
     * len(inlined_config["replicates"])
 )
-default_smoke = (
-    2 * len(inlined_config["personas"]) * len(inlined_config["arms"]) * 1
-)
+default_smoke = 2 * len(inlined_config["personas"]) * len(inlined_config["arms"]) * 1
 for literal in (default_full, default_smoke):
     assert not re.search(rf"(?<![\d.]){literal}(?![\d.])", serialized), (
         f"Notebook hard-codes the row count {literal}; it must derive it from the config"
