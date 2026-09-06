@@ -1,0 +1,67 @@
+# Question-side rewriting: rungs 4.1 and 5.1 on the held-out question split, all four
+# personas. Everything outside the `arms` block is copied from configs/eval_ablation.yaml
+# and must stay copied: the two runs are compared by joining their results.jsonl on
+# (question_ref, persona_id), and a divergent generator, judge, or top_k would confound
+# "where the rewrite is applied" with "what else changed".
+data:
+  questions_dir: data/questions
+  test_qids_path: data/splits/test_qids.txt
+  corpus_path: data/chunks/corpus.jsonl
+output_dir: results/rewrite_stage
+personas: [crammer, newcomer, scholar, steady]
+replicates: [1]
+
+embedder:
+  model_name: Qwen/Qwen3-Embedding-0.6B
+  # Must equal embedder.max_seq_length in configs/train_ropg.yaml.
+  max_seq_length: 2048
+  fp16: true
+  batch_size: 16
+
+rewriter:
+  model_name: Qwen/Qwen3-4B
+  max_seq_length: 768
+  batch_size: 8
+  generation:
+    max_new_tokens: 224
+    do_sample: false
+
+artifacts:
+  ropg_adapter_path: models/ropg/ropg_kd_runB_model/ropg_kd_checkpoints/checkpoint-best
+  dpo_adapter_path: models/dpo/dpo-seed-42/runs/wpo/seed-42/dpo_best
+
+# Both arms retrieve with the original persona-instructed query and answer the rewritten
+# one. They share a single retrieval pass, so the only difference between them is the
+# rewriter adapter. `profile: true` is mandatory here — the no-profile baseline lives in
+# configs/eval_ablation.yaml, and mixing it in would vary two things at once.
+arms:
+  - {name: trained_embedder_base_rewriter_question, embedder: ropg, profile: true, rewriter: base}
+  - {name: trained_embedder_rewriter_question,      embedder: ropg, profile: true, rewriter: dpo}
+
+retrieval:
+  top_k: 5
+
+generator:
+  model: deepseek-v4-flash
+  temperature: 0.2
+  max_completion_tokens: 1024
+  retry: {max_attempts: 3, initial_backoff_seconds: 1.0, backoff_multiplier: 2.0, max_backoff_seconds: 8.0}
+
+judges:
+  primary:
+    model: gpt-5.6-luna
+    reasoning_effort: low
+    temperature: 1.0
+    max_completion_tokens: 2048
+    retry: {max_attempts: 3, initial_backoff_seconds: 1.0, backoff_multiplier: 2.0, max_backoff_seconds: 8.0}
+  secondary:
+    model: gemini-3.5-flash-lite
+    thinking_level: minimal
+    temperature: 0.0
+    max_output_tokens: 512
+    retry: {max_attempts: 5, initial_backoff_seconds: 1.0, backoff_multiplier: 2.0, max_backoff_seconds: 16.0}
+
+execution:
+  max_workers: 8
+  bootstrap_samples: 5000
+  bootstrap_seed: 42

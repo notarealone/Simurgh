@@ -18,6 +18,12 @@ OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "local")
 # Endpoint; None lets the OpenAI SDK fall back to its default (the official API).
 OPENAI_BASE_URL: str | None = os.environ.get("OPENAI_BASE_URL")
 
+# Answer generator credentials. Metis routes each vendor under its own path prefix, so the
+# generator model can live behind a different base URL than the OpenAI-compatible judge.
+# Unset means "same endpoint as the judge".
+GENERATOR_API_KEY: str = os.environ.get("GENERATOR_API_KEY") or OPENAI_API_KEY
+GENERATOR_BASE_URL: str | None = os.environ.get("GENERATOR_BASE_URL") or OPENAI_BASE_URL
+
 # Gemini judge credentials.
 GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_ENDPOINT: str | None = os.environ.get("GEMINI_ENDPOINT")

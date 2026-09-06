@@ -100,7 +100,7 @@ Every held-out question is answered five times per persona, once per rung of the
 | `trained_embedder_rewriter` | the DPO-trained rewriter adapter |
 
 Two judges score every row. `gpt-5.6-luna` labelled the DPO preference pairs and was the
-ROPG teacher, so `gemini-3.7-flash` scores the identical rubric alongside it and
+ROPG teacher, so `gemini-3.5-flash-lite` scores the identical rubric alongside it and
 `judge_agreement.csv` reports how far the two agree.
 
 Run order, one non-interactive pass, top to bottom: packages, secrets, runtime knobs,
@@ -115,12 +115,21 @@ rows the run expects, is derived from the config.
     code(
         """# Every override defaults to None, meaning "use the embedded YAML".
 DATA_ROOT = "/kaggle/input/datasets/alirezahsn/simurgh-data"
-ROPG_ADAPTER_DIR = None      # set to a path to skip discovery for the ROPG checkpoint
-DPO_ADAPTER_DIR = None       # set to a path to skip discovery for the DPO adapter
+# Adapter directories, each the folder that holds `adapter_config.json`. A relative string
+# resolves under DATA_ROOT; an absolute one is taken as-is; None falls back to searching
+# /kaggle/input for exactly one adapter of the right base model.
+ROPG_ADAPTER_DIR = "models/ropg-runB/checkpoint-best"
+DPO_ADAPTER_DIR = "models/rewriter-wpo/dpo_best"
+RESUME_FROM = None           # dataset root holding rank*.jsonl from an interrupted run
 REPLICATES_OVERRIDE = None   # e.g. [1, 2, 3] to repeat every remote call three times
 PERSONAS_OVERRIDE = None     # e.g. ["newcomer"] to score the held-out persona only
 MAX_WORKERS_OVERRIDE = None  # e.g. 4 if the endpoint rate-limits
 SMOKE_LIMIT = 2              # questions in the smoke run
+
+# RESUME_FROM is its own mount, independent of DATA_ROOT: point it at a dataset that
+# contains nothing but the rank files. None means start clean. Resuming requires the config
+# below to be byte-for-byte what produced those rows — every override on this cell feeds
+# the SHA-256 that stamps each record, and a changed digest discards all of them.
 
 # Replicates are repetitions of identical remote calls, not seeds: they measure endpoint
 # sampling variance and nothing else. One replicate makes no variance claim at all.
@@ -136,13 +145,23 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 # Set before anything imports data.settings, which reads the environment once at import.
 from kaggle_secrets import UserSecretsClient
 
+# GENERATOR_* is optional: unset, data.settings falls back to the OPENAI_* pair. Set it when
+# the generator model sits behind another vendor prefix on the same provider.
+SECRET_KEYS = (
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "GENERATOR_API_KEY",
+    "GENERATOR_BASE_URL",
+    "GEMINI_API_KEY",
+    "GEMINI_ENDPOINT",
+)
 secrets = UserSecretsClient()
-for key in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "GEMINI_API_KEY", "GEMINI_ENDPOINT"):
+for key in SECRET_KEYS:
     try:
         os.environ[key] = secrets.get_secret(key)
     except Exception as error:
         print(f"secret {key} unavailable: {error}")
-for key in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "GEMINI_API_KEY", "GEMINI_ENDPOINT"):
+for key in SECRET_KEYS:
     print(f"{key} present: {bool(os.environ.get(key))}")
 
 DATA_ROOT = Path(DATA_ROOT)
@@ -176,9 +195,10 @@ print(f"Wrote {{len(SOURCE_FILES)}} source files under {{WORKDIR}}")
         '''import json
 
 
-def _candidates(leaf_name):
+def _adapters_on_mount():
+    """Every adapter directory under /kaggle/input, whatever it is called."""
     found = []
-    for config_path in sorted(Path("/kaggle/input").rglob(f"{leaf_name}/adapter_config.json")):
+    for config_path in sorted(Path("/kaggle/input").rglob("**/adapter_config.json")):
         try:
             base = json.loads(config_path.read_text(encoding="utf-8")).get(
                 "base_model_name_or_path", ""
@@ -189,13 +209,20 @@ def _candidates(leaf_name):
     return found
 
 
-def discover(leaf_name, base_family, require_segment=None, forbid_segments=()):
-    """Return the single adapter directory whose recorded base model matches.
+def _print_mount(found):
+    if not found:
+        print("  no adapter_config.json anywhere under /kaggle/input")
+    for directory, base in found:
+        print(f"  {directory} -> {base}")
+
+
+def discover(base_family, require_segment=None, forbid_segments=()):
+    """Return the single adapter directory on the mount whose base model matches.
 
     Matching is on the model family, not the exact repo id: Unsloth's 4-bit loader records
     `unsloth/qwen3-4b-unsloth-bnb-4bit` for a LoRA trained from `Qwen/Qwen3-4B`.
     """
-    found = _candidates(leaf_name)
+    found = _adapters_on_mount()
     validated = []
     for directory, base in found:
         parts = set(directory.parts)
@@ -206,27 +233,43 @@ def discover(leaf_name, base_family, require_segment=None, forbid_segments=()):
         if base_family in str(base).lower():
             validated.append(directory)
     if len(validated) != 1:
-        for directory, base in found:
-            print(f"  candidate {directory} -> {base}")
+        _print_mount(found)
         raise RuntimeError(
-            f"Expected exactly one {leaf_name} adapter on {base_family}, found "
-            f"{len(validated)}: {validated}"
+            f"Expected exactly one {base_family} adapter, found {len(validated)}: {validated}"
         )
     return validated[0]
 
 
-if ROPG_ADAPTER_DIR:
-    ROPG_ADAPTER = Path(ROPG_ADAPTER_DIR)
-else:
-    ROPG_ADAPTER = discover("checkpoint-best", "qwen3-embedding-0.6b")
-# The DPO family trained three arms into sibling directories. Only the plain `dpo` arm is
-# the promoted rewriter; wpo and robust_dpo carry the same leaf name and the same base model.
-if DPO_ADAPTER_DIR:
-    DPO_ADAPTER = Path(DPO_ADAPTER_DIR)
-else:
-    DPO_ADAPTER = discover(
-        "dpo_best", "qwen3-4b", require_segment="dpo", forbid_segments=("wpo", "robust_dpo")
-    )
+def resolve(setting, base_family, **discovery):
+    """Take the configured directory, or find one when the setting is None."""
+    if not setting:
+        return discover(base_family, **discovery)
+    directory = Path(setting)
+    if not directory.is_absolute():
+        directory = DATA_ROOT / directory
+    config_path = directory / "adapter_config.json"
+    if not config_path.is_file():
+        # The path is wrong, so print what is actually mounted: the fix is to copy one of
+        # these into the knobs cell, not to hunt through the dataset browser.
+        print(f"No adapter_config.json under {directory}. Adapters found on the mount:")
+        _print_mount(_adapters_on_mount())
+        raise FileNotFoundError(f"No adapter_config.json under {directory}")
+    base = json.loads(config_path.read_text(encoding="utf-8")).get("base_model_name_or_path", "")
+    if base_family not in str(base).lower():
+        raise RuntimeError(f"{directory} records base model {base!r}, not a {base_family} model")
+    return directory
+
+
+ROPG_ADAPTER = resolve(ROPG_ADAPTER_DIR, "qwen3-embedding-0.6b")
+# The DPO family trained three arms into sibling directories, all with the same base model.
+# `wpo` is the promoted rewriter (docs/results/dpo-arms-seed42-v2.md); `dpo` and
+# `robust_dpo` are the arms it beat.
+DPO_ADAPTER = resolve(
+    DPO_ADAPTER_DIR,
+    "qwen3-4b",
+    require_segment="wpo",
+    forbid_segments=("dpo", "robust_dpo"),
+)
 print("ROPG adapter:", ROPG_ADAPTER)
 print("DPO adapter: ", DPO_ADAPTER)
 '''
@@ -409,6 +452,58 @@ except subprocess.CalledProcessError as error:
 check_rows(load_results(smoke_config), smoke_config, SMOKE_EXPECTED)
 '''
     ),
+    markdown("## Seed an interrupted run"),
+    code(
+        """import shutil
+import sys
+
+sys.path.insert(0, str(WORKDIR / "benchmarks"))
+from eval_runner import config_digest  # the runner's own hash function, not a copy of it
+
+# /kaggle/input is read-only and the runner appends to output_dir/rank{N}.jsonl, so a
+# previous session's rows have to be copied in before torchrun starts. Failed rows are
+# retried; only `status == "ok"` keys are skipped.
+full_output_dir = Path(config["output_dir"])
+full_output_dir.mkdir(parents=True, exist_ok=True)
+
+# Hash the file the runner will load, not the dict in this kernel: identical by
+# construction, and hashing the file is what makes that a checked claim rather than a hope.
+RUN_DIGEST = config_digest(yaml.safe_load(FULL_CONFIG_PATH.read_text(encoding="utf-8")))
+print("this run's config digest:", RUN_DIGEST)
+
+if RESUME_FROM is None:
+    print("RESUME_FROM is None — starting clean")
+else:
+    sources = sorted(Path(RESUME_FROM).rglob("rank*.jsonl"))
+    if not sources:
+        raise FileNotFoundError(f"no rank*.jsonl anywhere under {RESUME_FROM}")
+    reusable = 0
+    for source in sources:
+        destination = full_output_dir / source.name
+        # Never clobber live progress: re-running this cell mid-session must not truncate
+        # the file the previous attempt in this same session already appended to.
+        if destination.is_file() and destination.stat().st_size:
+            print(f"kept existing {destination.name}, not overwritten")
+            continue
+        shutil.copy2(source, destination)
+        rows = [json.loads(line) for line in destination.open(encoding="utf-8") if line.strip()]
+        fresh = [row for row in rows if row.get("config_sha256") == RUN_DIGEST]
+        ok = sum(1 for row in fresh if row.get("status") == "ok")
+        reusable += ok
+        print(
+            f"seeded {destination.name}: {len(rows)} rows, {len(rows) - len(fresh)} under a "
+            f"foreign digest, {ok} reusable"
+        )
+    # Fail here rather than after the GPU stages: a digest mismatch means every remote call
+    # is about to be paid for again, and this is the last cell where that costs nothing.
+    if not reusable:
+        raise RuntimeError(
+            f"none of the seeded rows carry digest {RUN_DIGEST}. Either RESUME_FROM points "
+            "at another run's output or a knob on the runtime-knobs cell was changed since."
+        )
+    print(f"{reusable} of {FULL_EXPECTED} keys already done; {FULL_EXPECTED - reusable} pending")
+"""
+    ),
     markdown("## Full run"),
     code(
         """import subprocess
@@ -475,8 +570,9 @@ show("judge_agreement.csv")
   mixing them: they are excluded and counted as `stale_records`.
 * **Sustained 429s.** Set `MAX_WORKERS_OVERRIDE = 4` in the knobs cell and re-run. Nothing
   already completed is lost.
-* **Adapter discovery found zero or several candidates.** It prints every candidate with the
-  base model each one records. Pick one and set `ROPG_ADAPTER_DIR` or `DPO_ADAPTER_DIR`.
+* **An adapter path is wrong, or discovery found zero or several candidates.** Either way the
+  cell prints every adapter directory mounted under `/kaggle/input` with the base model each
+  one records. Copy the right one into `ROPG_ADAPTER_DIR` or `DPO_ADAPTER_DIR`.
 * **A judge disagrees with the other on the sign of a delta.** That is a result about the
   measurement, not the model. Repo measurement puts judge agreement near 70% on decisive
   verdicts, so a delta below that noise floor is not claimable from either judge.
@@ -511,7 +607,7 @@ ARM_NAMES = [arm["name"] for arm in inlined_config["arms"]]
 for required in (
     "deepseek-v4-flash",
     "gpt-5.6-luna",
-    "gemini-3.7-flash",
+    "gemini-3.5-flash-lite",
     "torchrun",
     "--nproc_per_node=2",
     "check=True",
@@ -553,7 +649,7 @@ assert inlined_config["judges"]["primary"]["model"] == "gpt-5.6-luna"
 # Low-effort reasoning draws from the same budget as the reply, and a truncated reply is a
 # retry, not a score.
 assert inlined_config["judges"]["primary"]["max_completion_tokens"] == 2048
-assert inlined_config["judges"]["secondary"]["model"] == "gemini-3.7-flash"
+assert inlined_config["judges"]["secondary"]["model"] == "gemini-3.5-flash-lite"
 assert inlined_config["execution"]["max_workers"] == 8
 
 # Shape only, never values. Pinning `replicates == [1]` here is precisely what would turn

@@ -1,0 +1,891 @@
+{
+  "run": "results/ablation/complete_eval_results/ablation",
+  "config_sha256": "e504af60e27b5868753826b5fdf5a6116162c2321c95e3777424d8844f397882",
+  "keys": 376,
+  "arms": [
+    "base_embedder_no_profile",
+    "base_embedder",
+    "trained_embedder",
+    "trained_embedder_base_rewriter",
+    "trained_embedder_rewriter"
+  ],
+  "n_boot": 10000,
+  "seed": 42,
+  "ladder": {
+    "primary|base_embedder_no_profile|context_utility": 2.893617021276596,
+    "primary|base_embedder_no_profile|faithfulness": 3.757978723404255,
+    "primary|base_embedder_no_profile|persona_alignment": 3.2632978723404253,
+    "primary|base_embedder_no_profile|pedagogical_quality": 2.404255319148936,
+    "primary|base_embedder|context_utility": 2.925531914893617,
+    "primary|base_embedder|faithfulness": 3.5877659574468086,
+    "primary|base_embedder|persona_alignment": 3.5132978723404253,
+    "primary|base_embedder|pedagogical_quality": 2.7606382978723403,
+    "primary|trained_embedder|context_utility": 3.3297872340425534,
+    "primary|trained_embedder|faithfulness": 3.625,
+    "primary|trained_embedder|persona_alignment": 3.6835106382978724,
+    "primary|trained_embedder|pedagogical_quality": 3.050531914893617,
+    "primary|trained_embedder_base_rewriter|context_utility": 3.1835106382978724,
+    "primary|trained_embedder_base_rewriter|faithfulness": 3.6143617021276597,
+    "primary|trained_embedder_base_rewriter|persona_alignment": 3.625,
+    "primary|trained_embedder_base_rewriter|pedagogical_quality": 2.8856382978723403,
+    "primary|trained_embedder_rewriter|context_utility": 3.2074468085106385,
+    "primary|trained_embedder_rewriter|faithfulness": 3.606382978723404,
+    "primary|trained_embedder_rewriter|persona_alignment": 3.627659574468085,
+    "primary|trained_embedder_rewriter|pedagogical_quality": 2.9574468085106385,
+    "primary|base_embedder_no_profile|answer_correctness": 0.6542553191489362,
+    "primary|base_embedder|answer_correctness": 0.6781914893617021,
+    "primary|trained_embedder|answer_correctness": 0.7553191489361702,
+    "primary|trained_embedder_base_rewriter|answer_correctness": 0.7074468085106383,
+    "primary|trained_embedder_rewriter|answer_correctness": 0.75,
+    "secondary|base_embedder_no_profile|context_utility": 2.844504021447721,
+    "secondary|base_embedder_no_profile|faithfulness": 3.6943699731903483,
+    "secondary|base_embedder_no_profile|persona_alignment": 3.1474530831099194,
+    "secondary|base_embedder_no_profile|pedagogical_quality": 2.8579088471849867,
+    "secondary|base_embedder|context_utility": 2.7706666666666666,
+    "secondary|base_embedder|faithfulness": 3.7573333333333334,
+    "secondary|base_embedder|persona_alignment": 3.522666666666667,
+    "secondary|base_embedder|pedagogical_quality": 3.2666666666666666,
+    "secondary|trained_embedder|context_utility": 3.227272727272727,
+    "secondary|trained_embedder|faithfulness": 3.7245989304812834,
+    "secondary|trained_embedder|persona_alignment": 3.6176470588235294,
+    "secondary|trained_embedder|pedagogical_quality": 3.443850267379679,
+    "secondary|trained_embedder_base_rewriter|context_utility": 3.0638297872340425,
+    "secondary|trained_embedder_base_rewriter|faithfulness": 3.726063829787234,
+    "secondary|trained_embedder_base_rewriter|persona_alignment": 3.547872340425532,
+    "secondary|trained_embedder_base_rewriter|pedagogical_quality": 3.3377659574468086,
+    "secondary|trained_embedder_rewriter|context_utility": 3.0215633423180592,
+    "secondary|trained_embedder_rewriter|faithfulness": 3.628032345013477,
+    "secondary|trained_embedder_rewriter|persona_alignment": 3.5849056603773586,
+    "secondary|trained_embedder_rewriter|pedagogical_quality": 3.3557951482479784,
+    "secondary|base_embedder_no_profile|answer_correctness": 0.6702412868632708,
+    "secondary|base_embedder|answer_correctness": 0.6986666666666667,
+    "secondary|trained_embedder|answer_correctness": 0.7700534759358288,
+    "secondary|trained_embedder_base_rewriter|answer_correctness": 0.7313829787234043,
+    "secondary|trained_embedder_rewriter|answer_correctness": 0.7574123989218329
+  },
+  "headline": {
+    "primary|trained_embedder_rewriter - base_embedder_no_profile": {
+      "context_utility": {
+        "before": 2.893617021276596,
+        "after": 3.2074468085106385,
+        "delta": 0.31382978723404253,
+        "lo": 0.18617021276595744,
+        "hi": 0.44148936170212766,
+        "p": 9.999000099990002e-05,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      },
+      "faithfulness": {
+        "before": 3.757978723404255,
+        "after": 3.606382978723404,
+        "delta": -0.15159574468085107,
+        "lo": -0.23670212765957446,
+        "hi": -0.06648936170212766,
+        "p": 0.0008999100089991,
+        "n": 376,
+        "p_holm": 0.0008999100089991
+      },
+      "persona_alignment": {
+        "before": 3.2632978723404253,
+        "after": 3.627659574468085,
+        "delta": 0.36436170212765956,
+        "lo": 0.27393617021276595,
+        "hi": 0.45478723404255317,
+        "p": 9.999000099990002e-05,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      },
+      "pedagogical_quality": {
+        "before": 2.404255319148936,
+        "after": 2.9574468085106385,
+        "delta": 0.5531914893617021,
+        "lo": 0.42021276595744683,
+        "hi": 0.6861702127659575,
+        "p": 9.999000099990002e-05,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      },
+      "answer_correctness": {
+        "before": 0.6542553191489362,
+        "after": 0.75,
+        "delta": 0.09574468085106383,
+        "lo": 0.055784574468085164,
+        "hi": 0.13829787234042554,
+        "p": 9.999000099990002e-05,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      }
+    },
+    "secondary|trained_embedder_rewriter - base_embedder_no_profile": {
+      "context_utility": {
+        "before": 2.845108695652174,
+        "after": 3.0244565217391304,
+        "delta": 0.1793478260869565,
+        "lo": 0.04619565217391304,
+        "hi": 0.31521739130434784,
+        "p": 0.009499050094990502,
+        "n": 368,
+        "p_holm": 0.018998100189981004
+      },
+      "faithfulness": {
+        "before": 3.6902173913043477,
+        "after": 3.625,
+        "delta": -0.06521739130434782,
+        "lo": -0.1793478260869565,
+        "hi": 0.04619565217391304,
+        "p": 0.2900709929007099,
+        "n": 368,
+        "p_holm": 0.2900709929007099
+      },
+      "persona_alignment": {
+        "before": 3.1467391304347827,
+        "after": 3.589673913043478,
+        "delta": 0.4429347826086957,
+        "lo": 0.33695652173913043,
+        "hi": 0.5489130434782609,
+        "p": 9.999000099990002e-05,
+        "n": 368,
+        "p_holm": 0.0004999500049995
+      },
+      "pedagogical_quality": {
+        "before": 2.8559782608695654,
+        "after": 3.3614130434782608,
+        "delta": 0.5054347826086957,
+        "lo": 0.38315217391304346,
+        "hi": 0.625,
+        "p": 9.999000099990002e-05,
+        "n": 368,
+        "p_holm": 0.0004999500049995
+      },
+      "answer_correctness": {
+        "before": 0.6684782608695652,
+        "after": 0.7581521739130435,
+        "delta": 0.08967391304347826,
+        "lo": 0.043478260869565216,
+        "hi": 0.1358695652173913,
+        "p": 0.00019998000199980003,
+        "n": 368,
+        "p_holm": 0.0005999400059994001
+      }
+    },
+    "primary|trained_embedder_rewriter - trained_embedder": {
+      "context_utility": {
+        "before": 3.3297872340425534,
+        "after": 3.2074468085106385,
+        "delta": -0.12234042553191489,
+        "lo": -0.22340425531914893,
+        "hi": -0.026595744680851064,
+        "p": 0.017598240175982403,
+        "n": 376,
+        "p_holm": 0.08799120087991202
+      },
+      "faithfulness": {
+        "before": 3.625,
+        "after": 3.606382978723404,
+        "delta": -0.018617021276595744,
+        "lo": -0.10106382978723404,
+        "hi": 0.06382978723404255,
+        "p": 0.6999300069993001,
+        "n": 376,
+        "p_holm": 1.0
+      },
+      "persona_alignment": {
+        "before": 3.6835106382978724,
+        "after": 3.627659574468085,
+        "delta": -0.05585106382978723,
+        "lo": -0.13297872340425532,
+        "hi": 0.018617021276595744,
+        "p": 0.1556844315568443,
+        "n": 376,
+        "p_holm": 0.505949405059494
+      },
+      "pedagogical_quality": {
+        "before": 3.050531914893617,
+        "after": 2.9574468085106385,
+        "delta": -0.09308510638297872,
+        "lo": -0.2127659574468085,
+        "hi": 0.026595744680851064,
+        "p": 0.1264873512648735,
+        "n": 376,
+        "p_holm": 0.505949405059494
+      },
+      "answer_correctness": {
+        "before": 0.7553191489361702,
+        "after": 0.75,
+        "delta": -0.005319148936170213,
+        "lo": -0.0425531914893617,
+        "hi": 0.031914893617021274,
+        "p": 0.883011698830117,
+        "n": 376,
+        "p_holm": 1.0
+      }
+    },
+    "secondary|trained_embedder_rewriter - trained_embedder": {
+      "context_utility": {
+        "before": 3.2195121951219514,
+        "after": 3.02710027100271,
+        "delta": -0.19241192411924118,
+        "lo": -0.2981029810298103,
+        "hi": -0.08943089430894309,
+        "p": 0.00039996000399960006,
+        "n": 369,
+        "p_holm": 0.001999800019998
+      },
+      "faithfulness": {
+        "before": 3.720867208672087,
+        "after": 3.6260162601626016,
+        "delta": -0.0948509485094851,
+        "lo": -0.1978319783197832,
+        "hi": 0.0027100271002710027,
+        "p": 0.0755924407559244,
+        "n": 369,
+        "p_holm": 0.3023697630236976
+      },
+      "persona_alignment": {
+        "before": 3.6124661246612466,
+        "after": 3.5907859078590785,
+        "delta": -0.02168021680216802,
+        "lo": -0.10840108401084012,
+        "hi": 0.06233062330623306,
+        "p": 0.6655334466553344,
+        "n": 369,
+        "p_holm": 1.0
+      },
+      "pedagogical_quality": {
+        "before": 3.4363143631436315,
+        "after": 3.3658536585365852,
+        "delta": -0.07046070460704607,
+        "lo": -0.17615176151761516,
+        "hi": 0.02981029810298103,
+        "p": 0.20267973202679732,
+        "n": 369,
+        "p_holm": 0.6080391960803919
+      },
+      "answer_correctness": {
+        "before": 0.7669376693766937,
+        "after": 0.7588075880758808,
+        "delta": -0.008130081300813009,
+        "lo": -0.04878048780487805,
+        "hi": 0.032520325203252036,
+        "p": 0.7807219278072193,
+        "n": 369,
+        "p_holm": 1.0
+      }
+    }
+  },
+  "rung_deltas": {
+    "primary|base_embedder - base_embedder_no_profile": {
+      "context_utility": {
+        "before": 2.893617021276596,
+        "after": 2.925531914893617,
+        "delta": 0.031914893617021274,
+        "lo": -0.04521276595744681,
+        "hi": 0.11170212765957446,
+        "p": 0.4607539246075392,
+        "n": 376,
+        "p_holm": 0.4607539246075392
+      },
+      "faithfulness": {
+        "before": 3.757978723404255,
+        "after": 3.5877659574468086,
+        "delta": -0.1702127659574468,
+        "lo": -0.2553191489361702,
+        "hi": -0.08776595744680851,
+        "p": 9.999000099990002e-05,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      },
+      "persona_alignment": {
+        "before": 3.2632978723404253,
+        "after": 3.5132978723404253,
+        "delta": 0.25,
+        "lo": 0.1675531914893617,
+        "hi": 0.3324468085106383,
+        "p": 9.999000099990002e-05,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      },
+      "pedagogical_quality": {
+        "before": 2.404255319148936,
+        "after": 2.7606382978723403,
+        "delta": 0.35638297872340424,
+        "lo": 0.2526595744680851,
+        "hi": 0.4627659574468085,
+        "p": 9.999000099990002e-05,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      },
+      "answer_correctness": {
+        "before": 0.6542553191489362,
+        "after": 0.6781914893617021,
+        "delta": 0.023936170212765957,
+        "lo": -0.007978723404255319,
+        "hi": 0.05851063829787234,
+        "p": 0.22057794220577942,
+        "n": 376,
+        "p_holm": 0.44115588441155884
+      }
+    },
+    "primary|trained_embedder - base_embedder": {
+      "context_utility": {
+        "before": 2.925531914893617,
+        "after": 3.3297872340425534,
+        "delta": 0.40425531914893614,
+        "lo": 0.2898936170212766,
+        "hi": 0.521343085106382,
+        "p": 9.999000099990002e-05,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      },
+      "faithfulness": {
+        "before": 3.5877659574468086,
+        "after": 3.625,
+        "delta": 0.03723404255319149,
+        "lo": -0.04521276595744681,
+        "hi": 0.12234042553191489,
+        "p": 0.42055794420557946,
+        "n": 376,
+        "p_holm": 0.42055794420557946
+      },
+      "persona_alignment": {
+        "before": 3.5132978723404253,
+        "after": 3.6835106382978724,
+        "delta": 0.1702127659574468,
+        "lo": 0.09574468085106383,
+        "hi": 0.2473404255319149,
+        "p": 9.999000099990002e-05,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      },
+      "pedagogical_quality": {
+        "before": 2.7606382978723403,
+        "after": 3.050531914893617,
+        "delta": 0.2898936170212766,
+        "lo": 0.17553191489361702,
+        "hi": 0.4095744680851064,
+        "p": 9.999000099990002e-05,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      },
+      "answer_correctness": {
+        "before": 0.6781914893617021,
+        "after": 0.7553191489361702,
+        "delta": 0.07712765957446809,
+        "lo": 0.0425531914893617,
+        "hi": 0.11436170212765957,
+        "p": 0.00019998000199980003,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      }
+    },
+    "primary|trained_embedder_base_rewriter - trained_embedder": {
+      "context_utility": {
+        "before": 3.3297872340425534,
+        "after": 3.1835106382978724,
+        "delta": -0.14627659574468085,
+        "lo": -0.2393617021276596,
+        "hi": -0.05851063829787234,
+        "p": 0.0023997600239976003,
+        "n": 376,
+        "p_holm": 0.011998800119988001
+      },
+      "faithfulness": {
+        "before": 3.625,
+        "after": 3.6143617021276597,
+        "delta": -0.010638297872340425,
+        "lo": -0.09049202127659568,
+        "hi": 0.07180851063829788,
+        "p": 0.8534146585341466,
+        "n": 376,
+        "p_holm": 0.8534146585341466
+      },
+      "persona_alignment": {
+        "before": 3.6835106382978724,
+        "after": 3.625,
+        "delta": -0.05851063829787234,
+        "lo": -0.13297872340425532,
+        "hi": 0.013297872340425532,
+        "p": 0.14438556144385561,
+        "n": 376,
+        "p_holm": 0.28877112288771123
+      },
+      "pedagogical_quality": {
+        "before": 3.050531914893617,
+        "after": 2.8856382978723403,
+        "delta": -0.16489361702127658,
+        "lo": -0.2765957446808511,
+        "hi": -0.05319148936170213,
+        "p": 0.0047995200479952005,
+        "n": 376,
+        "p_holm": 0.019198080191980802
+      },
+      "answer_correctness": {
+        "before": 0.7553191489361702,
+        "after": 0.7074468085106383,
+        "delta": -0.047872340425531915,
+        "lo": -0.0851063829787234,
+        "hi": -0.013297872340425532,
+        "p": 0.015798420157984203,
+        "n": 376,
+        "p_holm": 0.04739526047395261
+      }
+    },
+    "primary|trained_embedder_rewriter - trained_embedder_base_rewriter": {
+      "context_utility": {
+        "before": 3.1835106382978724,
+        "after": 3.2074468085106385,
+        "delta": 0.023936170212765957,
+        "lo": -0.0851063829787234,
+        "hi": 0.13297872340425532,
+        "p": 0.6993300669933007,
+        "n": 376,
+        "p_holm": 1.0
+      },
+      "faithfulness": {
+        "before": 3.6143617021276597,
+        "after": 3.606382978723404,
+        "delta": -0.007978723404255319,
+        "lo": -0.09042553191489362,
+        "hi": 0.07180851063829788,
+        "p": 0.896010398960104,
+        "n": 376,
+        "p_holm": 1.0
+      },
+      "persona_alignment": {
+        "before": 3.625,
+        "after": 3.627659574468085,
+        "delta": 0.0026595744680851063,
+        "lo": -0.07712765957446809,
+        "hi": 0.0851063829787234,
+        "p": 1.0,
+        "n": 376,
+        "p_holm": 1.0
+      },
+      "pedagogical_quality": {
+        "before": 2.8856382978723403,
+        "after": 2.9574468085106385,
+        "delta": 0.07180851063829788,
+        "lo": -0.05053191489361702,
+        "hi": 0.19680851063829788,
+        "p": 0.2762723727627237,
+        "n": 376,
+        "p_holm": 1.0
+      },
+      "answer_correctness": {
+        "before": 0.7074468085106383,
+        "after": 0.75,
+        "delta": 0.0425531914893617,
+        "lo": 0.0026595744680851063,
+        "hi": 0.08244680851063829,
+        "p": 0.0580941905809419,
+        "n": 376,
+        "p_holm": 0.29047095290470953
+      }
+    },
+    "secondary|base_embedder - base_embedder_no_profile": {
+      "context_utility": {
+        "before": 2.8413978494623655,
+        "after": 2.771505376344086,
+        "delta": -0.06989247311827956,
+        "lo": -0.15053763440860216,
+        "hi": 0.008064516129032258,
+        "p": 0.1050894910508949,
+        "n": 372,
+        "p_holm": 0.3152684731526847
+      },
+      "faithfulness": {
+        "before": 3.693548387096774,
+        "after": 3.7553763440860215,
+        "delta": 0.06182795698924731,
+        "lo": -0.026881720430107527,
+        "hi": 0.15053763440860216,
+        "p": 0.19168083191680832,
+        "n": 372,
+        "p_holm": 0.3152684731526847
+      },
+      "persona_alignment": {
+        "before": 3.1451612903225805,
+        "after": 3.524193548387097,
+        "delta": 0.3790322580645161,
+        "lo": 0.2768817204301075,
+        "hi": 0.478494623655914,
+        "p": 9.999000099990002e-05,
+        "n": 372,
+        "p_holm": 0.0004999500049995
+      },
+      "pedagogical_quality": {
+        "before": 2.8548387096774195,
+        "after": 3.2688172043010755,
+        "delta": 0.41397849462365593,
+        "lo": 0.30913978494623656,
+        "hi": 0.5188172043010753,
+        "p": 9.999000099990002e-05,
+        "n": 372,
+        "p_holm": 0.0004999500049995
+      },
+      "answer_correctness": {
+        "before": 0.6693548387096774,
+        "after": 0.6989247311827957,
+        "delta": 0.02956989247311828,
+        "lo": -0.005376344086021506,
+        "hi": 0.06720430107526881,
+        "p": 0.15398460153984603,
+        "n": 372,
+        "p_holm": 0.3152684731526847
+      }
+    },
+    "secondary|trained_embedder - base_embedder": {
+      "context_utility": {
+        "before": 2.774798927613941,
+        "after": 3.225201072386059,
+        "delta": 0.450402144772118,
+        "lo": 0.3324396782841823,
+        "hi": 0.5683646112600537,
+        "p": 9.999000099990002e-05,
+        "n": 373,
+        "p_holm": 0.0004999500049995
+      },
+      "faithfulness": {
+        "before": 3.7560321715817695,
+        "after": 3.7238605898123325,
+        "delta": -0.032171581769437,
+        "lo": -0.128686327077748,
+        "hi": 0.064343163538874,
+        "p": 0.5523447655234477,
+        "n": 373,
+        "p_holm": 0.5523447655234477
+      },
+      "persona_alignment": {
+        "before": 3.525469168900804,
+        "after": 3.616621983914209,
+        "delta": 0.09115281501340483,
+        "lo": 0.002680965147453083,
+        "hi": 0.17962466487935658,
+        "p": 0.052894710528947106,
+        "n": 373,
+        "p_holm": 0.10578942105789421
+      },
+      "pedagogical_quality": {
+        "before": 3.2707774798927614,
+        "after": 3.442359249329759,
+        "delta": 0.17158176943699732,
+        "lo": 0.06702412868632708,
+        "hi": 0.27882037533512066,
+        "p": 0.0017998200179982,
+        "n": 373,
+        "p_holm": 0.0053994600539946005
+      },
+      "answer_correctness": {
+        "before": 0.6997319034852547,
+        "after": 0.7694369973190348,
+        "delta": 0.06970509383378017,
+        "lo": 0.029490616621983913,
+        "hi": 0.10991957104557641,
+        "p": 0.000999900009999,
+        "n": 373,
+        "p_holm": 0.003999600039996
+      }
+    },
+    "secondary|trained_embedder_base_rewriter - trained_embedder": {
+      "context_utility": {
+        "before": 3.227272727272727,
+        "after": 3.06951871657754,
+        "delta": -0.15775401069518716,
+        "lo": -0.27540106951871657,
+        "hi": -0.0427807486631016,
+        "p": 0.007999200079992,
+        "n": 374,
+        "p_holm": 0.03999600039996
+      },
+      "faithfulness": {
+        "before": 3.7245989304812834,
+        "after": 3.7245989304812834,
+        "delta": 0.0,
+        "lo": -0.0962566844919786,
+        "hi": 0.09358288770053476,
+        "p": 1.0,
+        "n": 374,
+        "p_holm": 1.0
+      },
+      "persona_alignment": {
+        "before": 3.6176470588235294,
+        "after": 3.550802139037433,
+        "delta": -0.06684491978609626,
+        "lo": -0.15508021390374332,
+        "hi": 0.016042780748663103,
+        "p": 0.1372862713728627,
+        "n": 374,
+        "p_holm": 0.2745725427457254
+      },
+      "pedagogical_quality": {
+        "before": 3.443850267379679,
+        "after": 3.342245989304813,
+        "delta": -0.10160427807486631,
+        "lo": -0.20053475935828877,
+        "hi": -0.0053475935828877,
+        "p": 0.04939506049395061,
+        "n": 374,
+        "p_holm": 0.19758024197580243
+      },
+      "answer_correctness": {
+        "before": 0.7700534759358288,
+        "after": 0.732620320855615,
+        "delta": -0.0374331550802139,
+        "lo": -0.0748663101604278,
+        "hi": 0.0,
+        "p": 0.0678932106789321,
+        "n": 374,
+        "p_holm": 0.2036796320367963
+      }
+    },
+    "secondary|trained_embedder_rewriter - trained_embedder_base_rewriter": {
+      "context_utility": {
+        "before": 3.056603773584906,
+        "after": 3.0215633423180592,
+        "delta": -0.03504043126684636,
+        "lo": -0.15902964959568733,
+        "hi": 0.0889487870619946,
+        "p": 0.6108389161083891,
+        "n": 371,
+        "p_holm": 1.0
+      },
+      "faithfulness": {
+        "before": 3.7223719676549867,
+        "after": 3.628032345013477,
+        "delta": -0.09433962264150944,
+        "lo": -0.1967654986522911,
+        "hi": 0.0026954177897574125,
+        "p": 0.07689231076892311,
+        "n": 371,
+        "p_holm": 0.38446155384461556
+      },
+      "persona_alignment": {
+        "before": 3.5417789757412397,
+        "after": 3.5849056603773586,
+        "delta": 0.0431266846361186,
+        "lo": -0.04851752021563342,
+        "hi": 0.1320754716981132,
+        "p": 0.3962603739626037,
+        "n": 371,
+        "p_holm": 1.0
+      },
+      "pedagogical_quality": {
+        "before": 3.3288409703504045,
+        "after": 3.3557951482479784,
+        "delta": 0.026954177897574125,
+        "lo": -0.08086253369272237,
+        "hi": 0.1347708894878706,
+        "p": 0.6633336666333367,
+        "n": 371,
+        "p_holm": 1.0
+      },
+      "answer_correctness": {
+        "before": 0.7277628032345014,
+        "after": 0.7574123989218329,
+        "delta": 0.029649595687331536,
+        "lo": -0.013477088948787063,
+        "hi": 0.07277628032345014,
+        "p": 0.22207779222077792,
+        "n": 371,
+        "p_holm": 0.8883111688831117
+      }
+    }
+  },
+  "per_persona": {
+    "base_embedder_no_profile|persona_alignment|crammer": 2.9574468085106385,
+    "base_embedder_no_profile|persona_alignment|scholar": 3.606382978723404,
+    "base_embedder_no_profile|persona_alignment|steady": 3.4148936170212765,
+    "base_embedder_no_profile|persona_alignment|newcomer": 3.074468085106383,
+    "base_embedder|persona_alignment|crammer": 3.478723404255319,
+    "base_embedder|persona_alignment|scholar": 3.6808510638297873,
+    "base_embedder|persona_alignment|steady": 3.5638297872340425,
+    "base_embedder|persona_alignment|newcomer": 3.3297872340425534,
+    "trained_embedder|persona_alignment|crammer": 3.6914893617021276,
+    "trained_embedder|persona_alignment|scholar": 3.797872340425532,
+    "trained_embedder|persona_alignment|steady": 3.776595744680851,
+    "trained_embedder|persona_alignment|newcomer": 3.4680851063829787,
+    "trained_embedder_base_rewriter|persona_alignment|crammer": 3.5531914893617023,
+    "trained_embedder_base_rewriter|persona_alignment|scholar": 3.6702127659574466,
+    "trained_embedder_base_rewriter|persona_alignment|steady": 3.6914893617021276,
+    "trained_embedder_base_rewriter|persona_alignment|newcomer": 3.5851063829787235,
+    "trained_embedder_rewriter|persona_alignment|crammer": 3.617021276595745,
+    "trained_embedder_rewriter|persona_alignment|scholar": 3.765957446808511,
+    "trained_embedder_rewriter|persona_alignment|steady": 3.606382978723404,
+    "trained_embedder_rewriter|persona_alignment|newcomer": 3.521276595744681,
+    "base_embedder_no_profile|pedagogical_quality|crammer": 2.3617021276595747,
+    "base_embedder_no_profile|pedagogical_quality|scholar": 2.425531914893617,
+    "base_embedder_no_profile|pedagogical_quality|steady": 2.617021276595745,
+    "base_embedder_no_profile|pedagogical_quality|newcomer": 2.2127659574468086,
+    "base_embedder|pedagogical_quality|crammer": 2.872340425531915,
+    "base_embedder|pedagogical_quality|scholar": 2.627659574468085,
+    "base_embedder|pedagogical_quality|steady": 2.8617021276595747,
+    "base_embedder|pedagogical_quality|newcomer": 2.6808510638297873,
+    "trained_embedder|pedagogical_quality|crammer": 3.1808510638297873,
+    "trained_embedder|pedagogical_quality|scholar": 2.9893617021276597,
+    "trained_embedder|pedagogical_quality|steady": 3.1595744680851063,
+    "trained_embedder|pedagogical_quality|newcomer": 2.872340425531915,
+    "trained_embedder_base_rewriter|pedagogical_quality|crammer": 2.9361702127659575,
+    "trained_embedder_base_rewriter|pedagogical_quality|scholar": 2.648936170212766,
+    "trained_embedder_base_rewriter|pedagogical_quality|steady": 3.0851063829787235,
+    "trained_embedder_base_rewriter|pedagogical_quality|newcomer": 2.872340425531915,
+    "trained_embedder_rewriter|pedagogical_quality|crammer": 3.0319148936170213,
+    "trained_embedder_rewriter|pedagogical_quality|scholar": 2.8085106382978724,
+    "trained_embedder_rewriter|pedagogical_quality|steady": 3.0425531914893615,
+    "trained_embedder_rewriter|pedagogical_quality|newcomer": 2.9468085106382977,
+    "base_embedder_no_profile|context_utility|crammer": 2.9361702127659575,
+    "base_embedder_no_profile|context_utility|scholar": 2.872340425531915,
+    "base_embedder_no_profile|context_utility|steady": 2.904255319148936,
+    "base_embedder_no_profile|context_utility|newcomer": 2.8617021276595747,
+    "base_embedder|context_utility|crammer": 2.9148936170212765,
+    "base_embedder|context_utility|scholar": 2.9468085106382977,
+    "base_embedder|context_utility|steady": 2.9468085106382977,
+    "base_embedder|context_utility|newcomer": 2.893617021276596,
+    "trained_embedder|context_utility|crammer": 3.3404255319148937,
+    "trained_embedder|context_utility|scholar": 3.25531914893617,
+    "trained_embedder|context_utility|steady": 3.351063829787234,
+    "trained_embedder|context_utility|newcomer": 3.372340425531915,
+    "trained_embedder_base_rewriter|context_utility|crammer": 3.223404255319149,
+    "trained_embedder_base_rewriter|context_utility|scholar": 3.127659574468085,
+    "trained_embedder_base_rewriter|context_utility|steady": 3.25531914893617,
+    "trained_embedder_base_rewriter|context_utility|newcomer": 3.127659574468085,
+    "trained_embedder_rewriter|context_utility|crammer": 3.24468085106383,
+    "trained_embedder_rewriter|context_utility|scholar": 3.1914893617021276,
+    "trained_embedder_rewriter|context_utility|steady": 3.2127659574468086,
+    "trained_embedder_rewriter|context_utility|newcomer": 3.1808510638297873
+  },
+  "retrieval_shift": {
+    "overlap|base_embedder vs base_embedder_no_profile": 0.7659574468085106,
+    "overlap|trained_embedder vs base_embedder": 0.6117021276595744,
+    "overlap|trained_embedder_base_rewriter vs trained_embedder": 0.7654255319148936,
+    "overlap|trained_embedder_rewriter vs trained_embedder_base_rewriter": 0.6808510638297872,
+    "zero_context_utility|base_embedder_no_profile": 0.18351063829787234,
+    "zero_context_utility|base_embedder": 0.17553191489361702,
+    "zero_context_utility|trained_embedder": 0.08244680851063829,
+    "zero_context_utility|trained_embedder_base_rewriter": 0.10638297872340426,
+    "zero_context_utility|trained_embedder_rewriter": 0.11436170212765957,
+    "distinct_hitsets|base_embedder_no_profile": 1.0,
+    "distinct_hitsets|base_embedder": 2.8617021276595747,
+    "distinct_hitsets|trained_embedder": 2.1382978723404253,
+    "distinct_hitsets|trained_embedder_base_rewriter": 3.0638297872340425,
+    "distinct_hitsets|trained_embedder_rewriter": 3.25531914893617
+  },
+  "rewriter_mechanism": {
+    "token_fidelity_mean|trained_embedder_base_rewriter": 0.8027353638063776,
+    "token_fidelity_below_cut|trained_embedder_base_rewriter": 0.05053191489361702,
+    "token_fidelity_mean|trained_embedder_rewriter": 0.6110000916302814,
+    "token_fidelity_below_cut|trained_embedder_rewriter": 0.11702127659574468,
+    "context_utility_by_fidelity|trained_embedder_base_rewriter": {
+      "below": 2.6842105263157894,
+      "at_or_above": 3.2100840336134455
+    },
+    "context_utility_by_fidelity|trained_embedder_rewriter": {
+      "below": 2.75,
+      "at_or_above": 3.2680722891566263
+    },
+    "context_utility|trained_embedder": 3.3297872340425534,
+    "persona_word_rate|trained_embedder_base_rewriter": {
+      "grade nine": 0.0026595744680851063,
+      "exam": 0.010638297872340425
+    },
+    "persona_word_rate|trained_embedder_rewriter": {
+      "grade nine": 0.22606382978723405,
+      "exam": 0.21010638297872342
+    }
+  },
+  "per_question": {
+    "context_utility|base_embedder - base_embedder_no_profile": {
+      "win": 39,
+      "tie": 304,
+      "loss": 33
+    },
+    "context_utility|trained_embedder - base_embedder": {
+      "win": 72,
+      "tie": 286,
+      "loss": 18
+    },
+    "context_utility|trained_embedder_base_rewriter - trained_embedder": {
+      "win": 29,
+      "tie": 300,
+      "loss": 47
+    },
+    "context_utility|trained_embedder_rewriter - trained_embedder_base_rewriter": {
+      "win": 45,
+      "tie": 289,
+      "loss": 42
+    },
+    "persona_alignment|base_embedder - base_embedder_no_profile": {
+      "win": 111,
+      "tie": 231,
+      "loss": 34
+    },
+    "persona_alignment|trained_embedder - base_embedder": {
+      "win": 68,
+      "tie": 275,
+      "loss": 33
+    },
+    "persona_alignment|trained_embedder_base_rewriter - trained_embedder": {
+      "win": 38,
+      "tie": 289,
+      "loss": 49
+    },
+    "persona_alignment|trained_embedder_rewriter - trained_embedder_base_rewriter": {
+      "win": 49,
+      "tie": 277,
+      "loss": 50
+    },
+    "pedagogical_quality|base_embedder - base_embedder_no_profile": {
+      "win": 135,
+      "tie": 200,
+      "loss": 41
+    },
+    "pedagogical_quality|trained_embedder - base_embedder": {
+      "win": 96,
+      "tie": 231,
+      "loss": 49
+    },
+    "pedagogical_quality|trained_embedder_base_rewriter - trained_embedder": {
+      "win": 54,
+      "tie": 246,
+      "loss": 76
+    },
+    "pedagogical_quality|trained_embedder_rewriter - trained_embedder_base_rewriter": {
+      "win": 78,
+      "tie": 229,
+      "loss": 69
+    }
+  },
+  "judge_agreement": {
+    "agreement|context_utility": {
+      "exact": 0.8164794007490637,
+      "pearson_r": 0.8891679266340238,
+      "n": 1869
+    },
+    "agreement|faithfulness": {
+      "exact": 0.7228464419475655,
+      "pearson_r": 0.4259636952271613,
+      "n": 1869
+    },
+    "agreement|persona_alignment": {
+      "exact": 0.7164258962011771,
+      "pearson_r": 0.6478683148766659,
+      "n": 1869
+    },
+    "agreement|pedagogical_quality": {
+      "exact": 0.6035313001605136,
+      "pearson_r": 0.8158541736344862,
+      "n": 1869
+    },
+    "agreement|answer_correctness": {
+      "exact": 0.9609416800428037,
+      "pearson_r": 0.904496611354969,
+      "n": 1869
+    },
+    "delta_agreement_pearson_r": 0.877486142990581,
+    "delta_sign_agreement": 0.75,
+    "judge_bias|context_utility": -0.12199036918138041,
+    "judge_bias|faithfulness": 0.06902086677367576,
+    "judge_bias|persona_alignment": -0.05831995719636169,
+    "judge_bias|pedagogical_quality": 0.44141252006420545,
+    "judge_bias|answer_correctness": 0.01658640984483681
+  }
+}

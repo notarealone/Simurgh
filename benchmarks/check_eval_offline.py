@@ -121,7 +121,7 @@ def _record(
         "rewriter_adapter_path": None,
         "generator_model": "deepseek-v4-flash",
         "primary_judge_model": "gpt-5.6-luna",
-        "secondary_judge_model": "gemini-3.7-flash",
+        "secondary_judge_model": "gemini-3.5-flash-lite",
         "retrieval_instruction": "profile",
         "original_query": "question",
         "rewritten_query": None,

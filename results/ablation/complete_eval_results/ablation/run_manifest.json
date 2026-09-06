@@ -1,0 +1,245 @@
+{
+  "config": {
+    "data": {
+      "questions_dir": "/kaggle/input/datasets/alirezahsn/simurgh-data/questions",
+      "test_qids_path": "/kaggle/input/datasets/alirezahsn/simurgh-data/splits/test_qids.txt",
+      "corpus_path": "/kaggle/input/datasets/alirezahsn/simurgh-data/chunks/corpus.jsonl"
+    },
+    "output_dir": "/kaggle/working/eval/ablation",
+    "personas": [
+      "crammer",
+      "newcomer",
+      "scholar",
+      "steady"
+    ],
+    "replicates": [
+      1
+    ],
+    "embedder": {
+      "model_name": "Qwen/Qwen3-Embedding-0.6B",
+      "max_seq_length": 2048,
+      "fp16": true,
+      "batch_size": 16
+    },
+    "rewriter": {
+      "model_name": "Qwen/Qwen3-4B",
+      "max_seq_length": 768,
+      "batch_size": 8,
+      "generation": {
+        "max_new_tokens": 224,
+        "do_sample": false
+      }
+    },
+    "artifacts": {
+      "ropg_adapter_path": "/kaggle/input/datasets/alirezahsn/simurgh-data/models/ropg-runB/checkpoint-best",
+      "dpo_adapter_path": "/kaggle/input/datasets/alirezahsn/simurgh-data/models/rewriter-wpo/dpo_best"
+    },
+    "arms": [
+      {
+        "name": "base_embedder_no_profile",
+        "embedder": "base",
+        "profile": false,
+        "rewriter": "none"
+      },
+      {
+        "name": "base_embedder",
+        "embedder": "base",
+        "profile": true,
+        "rewriter": "none"
+      },
+      {
+        "name": "trained_embedder",
+        "embedder": "ropg",
+        "profile": true,
+        "rewriter": "none"
+      },
+      {
+        "name": "trained_embedder_base_rewriter",
+        "embedder": "ropg",
+        "profile": true,
+        "rewriter": "base"
+      },
+      {
+        "name": "trained_embedder_rewriter",
+        "embedder": "ropg",
+        "profile": true,
+        "rewriter": "dpo"
+      }
+    ],
+    "retrieval": {
+      "top_k": 5
+    },
+    "generator": {
+      "model": "deepseek-v4-flash",
+      "temperature": 0.2,
+      "max_completion_tokens": 1024,
+      "retry": {
+        "max_attempts": 3,
+        "initial_backoff_seconds": 1.0,
+        "backoff_multiplier": 2.0,
+        "max_backoff_seconds": 8.0
+      }
+    },
+    "judges": {
+      "primary": {
+        "model": "gpt-5.6-luna",
+        "reasoning_effort": "low",
+        "temperature": 1.0,
+        "max_completion_tokens": 2048,
+        "retry": {
+          "max_attempts": 3,
+          "initial_backoff_seconds": 1.0,
+          "backoff_multiplier": 2.0,
+          "max_backoff_seconds": 8.0
+        }
+      },
+      "secondary": {
+        "model": "gemini-3.5-flash-lite",
+        "thinking_level": "minimal",
+        "temperature": 0.0,
+        "max_output_tokens": 512,
+        "retry": {
+          "max_attempts": 5,
+          "initial_backoff_seconds": 1.0,
+          "backoff_multiplier": 2.0,
+          "max_backoff_seconds": 16.0
+        }
+      }
+    },
+    "execution": {
+      "max_workers": 8,
+      "bootstrap_samples": 5000,
+      "bootstrap_seed": 42
+    }
+  },
+  "config_sha256": "e504af60e27b5868753826b5fdf5a6116162c2321c95e3777424d8844f397882",
+  "corpus": {
+    "path": "/kaggle/input/datasets/alirezahsn/simurgh-data/chunks/corpus.jsonl",
+    "sha256": "287140c6a34e3e4a4c2c516496fa0160e01f9b93af3ad48f6184db729ff827a6",
+    "count": 171
+  },
+  "test_qids": {
+    "path": "/kaggle/input/datasets/alirezahsn/simurgh-data/splits/test_qids.txt",
+    "sha256": "324baad2757b34cb1c120b0afe12f2561d06481ad9c5e5dd397f7c8f4150a956",
+    "count": 94
+  },
+  "personas": [
+    {
+      "id": "crammer",
+      "split": "train",
+      "rendered": "A ninth-grader who finds the textbook hard to follow and has little background on this topic. Mainly wants to pass the exam — give the answer and what is needed to score — but it must be spelled out simply, step by step, with examples."
+    },
+    {
+      "id": "newcomer",
+      "split": "test",
+      "rendered": "A bright ninth-grader who reads well but is new to this topic. Wants real understanding — the why and how, not just the answer — and needs worked examples to bridge the missing background."
+    },
+    {
+      "id": "scholar",
+      "split": "train",
+      "rendered": "A ninth-grader who reads dense material easily and has solid background on this topic. Wants to understand the underlying why and how, and the connections between ideas. Prefers a terse, high-level treatment without hand-holding or padding."
+    },
+    {
+      "id": "steady",
+      "split": "train",
+      "rendered": "A capable ninth-grader with average background on this topic. Wants a correct answer with a brief justification, balanced toward exam needs. Does not need elaborate scaffolding, but does appreciate a one-line reason."
+    }
+  ],
+  "arms": [
+    {
+      "name": "base_embedder_no_profile",
+      "embedder": "base",
+      "profile": false,
+      "rewriter": "none"
+    },
+    {
+      "name": "base_embedder",
+      "embedder": "base",
+      "profile": true,
+      "rewriter": "none"
+    },
+    {
+      "name": "trained_embedder",
+      "embedder": "ropg",
+      "profile": true,
+      "rewriter": "none"
+    },
+    {
+      "name": "trained_embedder_base_rewriter",
+      "embedder": "ropg",
+      "profile": true,
+      "rewriter": "base"
+    },
+    {
+      "name": "trained_embedder_rewriter",
+      "embedder": "ropg",
+      "profile": true,
+      "rewriter": "dpo"
+    }
+  ],
+  "replicates": [
+    1
+  ],
+  "adapters": {
+    "ropg": {
+      "path": "/kaggle/input/datasets/alirezahsn/simurgh-data/models/ropg-runB/checkpoint-best",
+      "base_model": "Qwen/Qwen3-Embedding-0.6B"
+    },
+    "dpo": {
+      "path": "/kaggle/input/datasets/alirezahsn/simurgh-data/models/rewriter-wpo/dpo_best",
+      "base_model": "unsloth/qwen3-4b-unsloth-bnb-4bit"
+    }
+  },
+  "models": {
+    "generator": {
+      "model": "deepseek-v4-flash",
+      "temperature": 0.2,
+      "max_completion_tokens": 1024
+    },
+    "judge_primary": {
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "low",
+      "temperature": 1.0,
+      "max_completion_tokens": 2048,
+      "retry": {
+        "max_attempts": 3,
+        "initial_backoff_seconds": 1.0,
+        "backoff_multiplier": 2.0,
+        "max_backoff_seconds": 8.0
+      }
+    },
+    "judge_secondary": {
+      "model": "gemini-3.5-flash-lite",
+      "thinking_level": "minimal",
+      "temperature": 0.0,
+      "max_output_tokens": 512,
+      "retry": {
+        "max_attempts": 5,
+        "initial_backoff_seconds": 1.0,
+        "backoff_multiplier": 2.0,
+        "max_backoff_seconds": 16.0
+      }
+    }
+  },
+  "world_size": 2,
+  "records_per_rank": {
+    "0": 940,
+    "1": 940
+  },
+  "expected_keys": 1880,
+  "merged_keys": 1880,
+  "successful_keys": 1880,
+  "failures_by_stage": {},
+  "secondary_judge_missing": 11,
+  "stale_records": 0,
+  "versions": {
+    "torch": "2.10.0+cu128",
+    "transformers": "4.57.6",
+    "peft": "0.18.0",
+    "sentence-transformers": "5.6.0",
+    "faiss-gpu": "1.15.0",
+    "faiss-cpu": null,
+    "openai": "2.32.0",
+    "google-genai": "2.20.0"
+  }
+}

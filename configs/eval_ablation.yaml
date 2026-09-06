@@ -29,9 +29,11 @@ rewriter:
     max_new_tokens: 224
     do_sample: false
 
+# Local paths for the CLI route. The Kaggle notebook overrides both from its knobs cell.
+# The rewriter is the `wpo` arm: it is the promoted one, per docs/results/dpo-arms-seed42-v2.md.
 artifacts:
-  ropg_adapter_path: models/ropg/runB/checkpoint-best
-  dpo_adapter_path: models/dpo/dpo/dpo_best
+  ropg_adapter_path: models/ropg/ropg_kd_runB_model/ropg_kd_checkpoints/checkpoint-best
+  dpo_adapter_path: models/dpo/dpo-seed-42/runs/wpo/seed-42/dpo_best
 
 # Baseline ladder, one rung per arm. `profile: false` strips the learner profile from both
 # the retrieval instruction and the answer prompt; the judge always receives it.
@@ -61,13 +63,22 @@ judges:
     # Covers hidden low-effort reasoning plus the small JSON reply.
     max_completion_tokens: 2048
     retry: {max_attempts: 3, initial_backoff_seconds: 1.0, backoff_multiplier: 2.0, max_backoff_seconds: 8.0}
-  # Secondary. Independent of the pair labeller and of the ROPG teacher.
+  # Secondary. Independent of the pair labeller and of the ROPG teacher. Flash-lite rather
+  # than the pricier gemini-3.7-flash: on 89 paired keys the two agree with Luna at
+  # indistinguishable rates (McNemar p = 0.541, docs/results/judge-agreement-luna-gemini-v1.md),
+  # so the cheaper model buys the same signal.
   secondary:
-    model: gemini-3.7-flash
+    model: gemini-3.5-flash-lite
+    # This model's floor, and verified to parse at max_output_tokens 512. Thinking tokens
+    # draw from the same budget: `medium` and `high` spend it before the JSON closes and
+    # come back as an unterminated string.
     thinking_level: minimal
     temperature: 0.0
     max_output_tokens: 512
-    retry: {max_attempts: 3, initial_backoff_seconds: 1.0, backoff_multiplier: 2.0, max_backoff_seconds: 8.0}
+    # Five attempts, not three: the Metis Gemini route emits intermittent nginx 504s (3 of
+    # 9 probe calls). A secondary failure does not fail the row, it drops that row out of
+    # judge_agreement.csv, so the extra attempts protect coverage rather than the run.
+    retry: {max_attempts: 5, initial_backoff_seconds: 1.0, backoff_multiplier: 2.0, max_backoff_seconds: 16.0}
 
 execution:
   # Concurrent in-flight remote requests per rank; 16 across two T4s.

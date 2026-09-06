@@ -13,12 +13,13 @@ base_embedder_no_profile         naive RAG: no persona anywhere in the pipeline
 base_embedder                    + persona in the retrieval instruction and prompt
 trained_embedder                 + the ROPG-KD retriever adapter
 trained_embedder_base_rewriter   + query rewriting by an *untrained* Qwen3-4B
-trained_embedder_rewriter        + the DPO-trained rewriter adapter
+trained_embedder_rewriter        + the promoted preference-trained rewriter adapter
 ===============================  ==================================================
 
-The fourth rung is what makes the fifth interpretable. ``docs/results/dpo-arms-seed42-v1.md``
-reports the DPO rewriter at Holm *p* = 0.502 against its own base model, so a delta measured
-against "no rewriter at all" would credit the adapter for the act of rewriting.
+The fourth rung is what makes the fifth interpretable. The promoted rewriter is the `wpo`
+arm of ``docs/results/dpo-arms-seed42-v2.md``, which beat its own untrained base model on a
+rewrite-quality tournament, not end to end. A delta measured against "no rewriter at all"
+would credit the adapter for the act of rewriting.
 
 The index is built from raw ``corpus.jsonl`` text, never through ``rag.dense_store``: that
 module normalizes Persian text and all 171 corpus chunks change under it, while
@@ -34,7 +35,9 @@ import gc
 import hashlib
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -56,7 +59,14 @@ for _p in (str(SRC_DIR), str(BENCHMARKS_DIR)):
 # ruff: noqa: E402  (deliberate mid-file imports; sys.path must be set first)
 from compare_runs import holm, paired_stats
 from data.questions import load_question
-from data.settings import GEMINI_API_KEY, GEMINI_ENDPOINT, OPENAI_API_KEY, OPENAI_BASE_URL
+from data.settings import (
+    GEMINI_API_KEY,
+    GEMINI_ENDPOINT,
+    GENERATOR_API_KEY,
+    GENERATOR_BASE_URL,
+    OPENAI_API_KEY,
+    OPENAI_BASE_URL,
+)
 from judge import SCORE_FIELDS, GeminiJudge, JudgeError, LunaJudge, RetryPolicy
 from personalization.profiles import PERSONAS, render_profile
 
@@ -256,31 +266,63 @@ def _adapter_base_model(adapter_dir: Path) -> str | None:
         return None
 
 
-def probe_models(config: dict[str, Any]) -> dict[str, bool]:
-    """One minimal call per remote model literal.
+def probe_models(config: dict[str, Any]) -> dict[str, str]:
+    """One minimal call per remote model literal, reporting ``ok`` or the failure.
 
-    A misspelled model name is otherwise discovered after the GPU stages, hours in.
+    A misspelled model name is otherwise discovered after the GPU stages, hours in. Every
+    endpoint is probed even after one fails: three preflights to learn three problems costs
+    three Kaggle sessions.
+
+    Each probe retries under its role's configured policy. The Metis Gemini route returns
+    intermittent nginx 504s, and a single-shot probe turns one of those into a red
+    preflight for an endpoint the run itself would have retried through. The attempt count
+    is reported so a flaky-but-passing endpoint still shows up.
     """
     from rag.llm import GeminiClient, OpenAICompatClient
 
-    results: dict[str, bool] = {}
+    def probe(call: Callable[[], str], retry_config: dict[str, Any], label: str) -> str:
+        try:
+            _, attempts = _call_with_retry(call, RetryPolicy.from_config(retry_config), label)
+        except RemoteCallError as exc:
+            return str(exc)
+        return "ok" if attempts == 1 else f"ok after {attempts} attempts"
+
+    results: dict[str, str] = {}
     generator = config["generator"]["model"]
     primary = config["judges"]["primary"]["model"]
     secondary = config["judges"]["secondary"]["model"]
-    for model in (generator, primary):
+    # The generator may sit behind a different vendor prefix than the OpenAI-compatible
+    # judge; GENERATOR_BASE_URL falls back to OPENAI_BASE_URL when it does not. Each probe
+    # carries its role's configured temperature: some models reject any other value, and a
+    # probe that fails on a knob the real call never sends is a false alarm.
+    for model, base_url, api_key, role in (
+        (generator, GENERATOR_BASE_URL, GENERATOR_API_KEY, config["generator"]),
+        (primary, OPENAI_BASE_URL, OPENAI_API_KEY, config["judges"]["primary"]),
+    ):
         client = OpenAICompatClient(
-            base_url=OPENAI_BASE_URL, api_key=OPENAI_API_KEY, model=model, max_tokens=16
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            temperature=float(role["temperature"]),
+            max_tokens=16,
         )
-        results[model] = bool(client.chat([{"role": "user", "content": "ping"}]).strip())
+        results[model] = probe(
+            lambda call=client.chat: call([{"role": "user", "content": "ping"}]),
+            role["retry"],
+            model,
+        )
+    secondary_config = config["judges"]["secondary"]
     gemini = GeminiClient(
         base_url=GEMINI_ENDPOINT,
         api_key=GEMINI_API_KEY,
         model=secondary,
         temperature=0.0,
         max_output_tokens=16,
-        thinking_level=config["judges"]["secondary"].get("thinking_level"),
+        thinking_level=secondary_config.get("thinking_level"),
     )
-    results[secondary] = bool(gemini.generate("ping").strip())
+    results[secondary] = probe(
+        lambda: gemini.generate("ping"), secondary_config["retry"], secondary
+    )
     return results
 
 
@@ -439,8 +481,8 @@ def print_preflight(report: dict[str, Any]) -> None:
     for label, info in report["adapters"].items():
         print(f"{label:<17} {info['path']} -> {info['base_model']}")
     print(f"Corpus chunks:    {report['corpus_count']}")
-    for model, ok in report["probes"].items():
-        print(f"Probe {model:<20} {'ok' if ok else 'EMPTY REPLY'}")
+    for model, status in report["probes"].items():
+        print(f"Probe {model:<20} {status}")
     print(f"Expected keys:    {report['expected_keys']}")
 
 
@@ -572,29 +614,98 @@ def _retrieve_for_arm(
     return contexts
 
 
-def _rewrite_all(
-    config: dict[str, Any], adapter_path: str | None, cases: list[Case], device: str
-) -> list[str]:
+# torchrun's rendezvous variables. The rewriter child is a plain single-process job; left
+# in its environment they make torch believe it is rank N of a group it never joins.
+_DIST_ENV_VARS = frozenset(
+    {
+        "RANK",
+        "LOCAL_RANK",
+        "WORLD_SIZE",
+        "LOCAL_WORLD_SIZE",
+        "GROUP_RANK",
+        "GROUP_WORLD_SIZE",
+        "ROLE_RANK",
+        "ROLE_NAME",
+        "ROLE_WORLD_SIZE",
+        "MASTER_ADDR",
+        "MASTER_PORT",
+    }
+)
+
+
+def _rewrite_worker(request_path: Path, response_path: Path) -> int:
+    """Child-process entry point for one rewriter pass. See ``_rewrite_all``."""
     from rag.rewriter import DPORewriter
 
-    rewriter_config = config["rewriter"]
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    rewriter_config = request["rewriter"]
     rewriter = DPORewriter(
         model_name=rewriter_config["model_name"],
-        adapter_path=adapter_path,
-        device=device,
+        adapter_path=request["adapter_path"],
+        device=request["device"],
         max_seq_length=rewriter_config["max_seq_length"],
         generation=rewriter_config["generation"],
     )
     batch_size = int(rewriter_config["batch_size"])
+    profiles = request["profiles"]
+    queries = request["queries"]
     rewrites: list[str] = []
-    for start in range(0, len(cases), batch_size):
-        batch = cases[start : start + batch_size]
-        rewrites.extend(
-            rewriter.rewrite_batch(
-                [case.profile_rendered for case in batch], [case.query for case in batch]
-            )
+    for start in range(0, len(queries), batch_size):
+        stop = start + batch_size
+        rewrites.extend(rewriter.rewrite_batch(profiles[start:stop], queries[start:stop]))
+    response_path.write_text(json.dumps(rewrites, ensure_ascii=False), encoding="utf-8")
+    return 0
+
+
+def _rewrite_all(
+    config: dict[str, Any], adapter_path: str | None, cases: list[Case], device: str
+) -> list[str]:
+    """Rewrite every case's query in a child process.
+
+    The child, not this process, is what makes this correct. ``DPORewriter`` imports
+    Unsloth, and importing Unsloth rewrites ``transformers``' Qwen3 attention forward pass
+    globally to a variant that only Unsloth's own loader prepares (it reads an
+    ``apply_qkv`` attribute it attaches itself). Any Qwen3 model loaded afterwards through
+    plain ``transformers`` -- here the stage C sentence-transformers embedder -- then dies
+    with ``'Qwen3Attention' object has no attribute 'apply_qkv'``. Confining the import to
+    a subprocess keeps the patch out of the parent, and exiting also returns the
+    rewriter's GPU memory unconditionally.
+    """
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in _DIST_ENV_VARS and not key.startswith("TORCHELASTIC_")
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        request_path = Path(tmp) / "request.json"
+        response_path = Path(tmp) / "response.json"
+        request_path.write_text(
+            json.dumps(
+                {
+                    "rewriter": config["rewriter"],
+                    "adapter_path": adapter_path,
+                    "device": device,
+                    "profiles": [case.profile_rendered for case in cases],
+                    "queries": [case.query for case in cases],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
         )
-    _free(rewriter)
+        subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--rewrite-worker",
+                str(request_path),
+                str(response_path),
+            ],
+            check=True,
+            env=env,
+        )
+        rewrites = json.loads(response_path.read_text(encoding="utf-8"))
+    if len(rewrites) != len(cases):
+        raise RuntimeError(f"rewriter returned {len(rewrites)} queries for {len(cases)} cases")
     return rewrites
 
 
@@ -721,8 +832,8 @@ def run_remote_stage(
 
     generator_config = config["generator"]
     generator = OpenAICompatClient(
-        base_url=OPENAI_BASE_URL,
-        api_key=OPENAI_API_KEY,
+        base_url=GENERATOR_BASE_URL,
+        api_key=GENERATOR_API_KEY,
         model=generator_config["model"],
         temperature=float(generator_config["temperature"]),
         max_tokens=int(generator_config["max_completion_tokens"]),
@@ -1258,6 +1369,12 @@ def merge(
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # Intercepted ahead of argparse: the worker is an internal re-entry, not a user-facing
+    # mode, and it must not touch the config, the rank environment, or the output dir.
+    if argv[:1] == ["--rewrite-worker"]:
+        return _rewrite_worker(Path(argv[1]), Path(argv[2]))
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
     parser.add_argument("--preflight-only", action="store_true")

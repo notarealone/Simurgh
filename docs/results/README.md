@@ -14,6 +14,7 @@ Committed results:
 - [ropg-runs-comparison-v1](ropg-runs-comparison-v1.md) — Stage 1 run comparison.
 - [dpo-arms-seed42-v1](dpo-arms-seed42-v1.md) — Stage 2 DPO/WPO/robust screening at seed 42 on v3 pair data; no arm promoted.
 - [dpo-arms-seed42-v2](dpo-arms-seed42-v2.md) — the same three arms rerun on v4 pair data with the repaired trainer; `wpo` beats the untrained policy, with figures under `figures/dpo-v4-vs-v3/`.
+- [eval-ablation-v1](eval-ablation-v1.md) — the full five-arm ladder on the held-out test split: ROPG is the load-bearing rung, query rewriting is a regression, with figures under `figures/eval-ablation-v1/`.
 - [judge-agreement-luna-gemini-v1](judge-agreement-luna-gemini-v1.md) — how far the Luna preference labels and the Gemini tournament judge agree, and the noise floor that implies.
 - [judge-noise-luna-v1](judge-noise-luna-v1.md) — Luna replicate noise at `temperature: 0`, and the `filters.min_margin` calibration it produced.
 - [dpo-data-v4-audit](dpo-data-v4-audit.md) — as-built audit of the fourth DPO pair generation (second schema): yield, label noise, persona skew, cleanliness.
