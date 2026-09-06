@@ -1419,13 +1419,17 @@ def main(argv: list[str] | None = None) -> int:
 
         torch.cuda.set_device(local_rank)
         # gloo, not NCCL: this job is inference-only and its one collective is a barrier,
-        # so no GPU tensor is ever communicated.
+        # so no GPU tensor is ever communicated. The timeout has to cover rank skew, not a
+        # network round trip: the ranks split the shard statically and every row costs one
+        # generation plus two judge calls of unpredictable latency, so the faster rank sits
+        # in this barrier for however long the straggler needs. Ten minutes was not enough
+        # once already — rank 0 finished 9 minutes early and killed a run that had 1 row left.
         dist.init_process_group(
             backend="gloo",
             init_method="env://",
             rank=rank,
             world_size=world_size,
-            timeout=timedelta(minutes=10),
+            timeout=timedelta(hours=2),
         )
 
     print(f"[rank {rank}] {len(shard)} cases, config {digest[:12]}", flush=True)

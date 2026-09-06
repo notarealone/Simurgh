@@ -1,0 +1,16 @@
+arm,persona,metric,n,exact_agreement_rate,mean_abs_diff,pearson_r
+all,all,context_utility,16,0.8125,0.25,0.9454866276795669
+all,all,answer_correctness,16,1.0,0.0,0.9999999999999998
+all,all,faithfulness,16,0.5625,0.5625,0.6798834181250946
+all,all,persona_alignment,16,0.8125,0.1875,0.9097435786709178
+all,all,pedagogical_quality,16,0.5,0.75,0.8036798198060273
+trained_embedder_base_rewriter_question,all,context_utility,8,0.75,0.375,0.9011533136409089
+trained_embedder_base_rewriter_question,all,answer_correctness,8,1.0,0.0,0.9999999999999998
+trained_embedder_base_rewriter_question,all,faithfulness,8,0.75,0.5,0.6888747637021417
+trained_embedder_base_rewriter_question,all,persona_alignment,8,0.75,0.25,0.9591852517188469
+trained_embedder_base_rewriter_question,all,pedagogical_quality,8,0.25,1.125,0.7552632224670202
+trained_embedder_rewriter_question,all,context_utility,8,0.875,0.125,0.9858088205339611
+trained_embedder_rewriter_question,all,answer_correctness,8,1.0,0.0,1.0
+trained_embedder_rewriter_question,all,faithfulness,8,0.375,0.625,0.7142857142857141
+trained_embedder_rewriter_question,all,persona_alignment,8,0.875,0.125,0.9538209664765321
+trained_embedder_rewriter_question,all,pedagogical_quality,8,0.75,0.375,0.8885233166386387

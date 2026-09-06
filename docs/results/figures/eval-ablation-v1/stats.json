@@ -1,13 +1,17 @@
 {
   "run": "results/ablation/complete_eval_results/ablation",
+  "question_run": "results/ablation/remaining_eval_results/rewrite_stage",
   "config_sha256": "e504af60e27b5868753826b5fdf5a6116162c2321c95e3777424d8844f397882",
+  "question_config_sha256": "056118a217d115b6cda2b47638cf55f3deb5d95eed44685a62049da568b836a2",
   "keys": 376,
   "arms": [
     "base_embedder_no_profile",
     "base_embedder",
     "trained_embedder",
     "trained_embedder_base_rewriter",
-    "trained_embedder_rewriter"
+    "trained_embedder_rewriter",
+    "trained_embedder_base_rewriter_question",
+    "trained_embedder_rewriter_question"
   ],
   "n_boot": 10000,
   "seed": 42,
@@ -32,11 +36,21 @@
     "primary|trained_embedder_rewriter|faithfulness": 3.606382978723404,
     "primary|trained_embedder_rewriter|persona_alignment": 3.627659574468085,
     "primary|trained_embedder_rewriter|pedagogical_quality": 2.9574468085106385,
+    "primary|trained_embedder_base_rewriter_question|context_utility": 3.327127659574468,
+    "primary|trained_embedder_base_rewriter_question|faithfulness": 3.3882978723404253,
+    "primary|trained_embedder_base_rewriter_question|persona_alignment": 3.4441489361702127,
+    "primary|trained_embedder_base_rewriter_question|pedagogical_quality": 2.8377659574468086,
+    "primary|trained_embedder_rewriter_question|context_utility": 3.3085106382978724,
+    "primary|trained_embedder_rewriter_question|faithfulness": 3.3111702127659575,
+    "primary|trained_embedder_rewriter_question|persona_alignment": 3.4893617021276597,
+    "primary|trained_embedder_rewriter_question|pedagogical_quality": 2.8351063829787235,
     "primary|base_embedder_no_profile|answer_correctness": 0.6542553191489362,
     "primary|base_embedder|answer_correctness": 0.6781914893617021,
     "primary|trained_embedder|answer_correctness": 0.7553191489361702,
     "primary|trained_embedder_base_rewriter|answer_correctness": 0.7074468085106383,
     "primary|trained_embedder_rewriter|answer_correctness": 0.75,
+    "primary|trained_embedder_base_rewriter_question|answer_correctness": 0.6835106382978723,
+    "primary|trained_embedder_rewriter_question|answer_correctness": 0.675531914893617,
     "secondary|base_embedder_no_profile|context_utility": 2.844504021447721,
     "secondary|base_embedder_no_profile|faithfulness": 3.6943699731903483,
     "secondary|base_embedder_no_profile|persona_alignment": 3.1474530831099194,
@@ -57,11 +71,21 @@
     "secondary|trained_embedder_rewriter|faithfulness": 3.628032345013477,
     "secondary|trained_embedder_rewriter|persona_alignment": 3.5849056603773586,
     "secondary|trained_embedder_rewriter|pedagogical_quality": 3.3557951482479784,
+    "secondary|trained_embedder_base_rewriter_question|context_utility": 3.0797872340425534,
+    "secondary|trained_embedder_base_rewriter_question|faithfulness": 3.5930851063829787,
+    "secondary|trained_embedder_base_rewriter_question|persona_alignment": 3.521276595744681,
+    "secondary|trained_embedder_base_rewriter_question|pedagogical_quality": 3.3404255319148937,
+    "secondary|trained_embedder_rewriter_question|context_utility": 3.0718085106382977,
+    "secondary|trained_embedder_rewriter_question|faithfulness": 3.617021276595745,
+    "secondary|trained_embedder_rewriter_question|persona_alignment": 3.5638297872340425,
+    "secondary|trained_embedder_rewriter_question|pedagogical_quality": 3.390957446808511,
     "secondary|base_embedder_no_profile|answer_correctness": 0.6702412868632708,
     "secondary|base_embedder|answer_correctness": 0.6986666666666667,
     "secondary|trained_embedder|answer_correctness": 0.7700534759358288,
     "secondary|trained_embedder_base_rewriter|answer_correctness": 0.7313829787234043,
-    "secondary|trained_embedder_rewriter|answer_correctness": 0.7574123989218329
+    "secondary|trained_embedder_rewriter|answer_correctness": 0.7574123989218329,
+    "secondary|trained_embedder_base_rewriter_question|answer_correctness": 0.6941489361702128,
+    "secondary|trained_embedder_rewriter_question|answer_correctness": 0.6968085106382979
   },
   "headline": {
     "primary|trained_embedder_rewriter - base_embedder_no_profile": {
@@ -270,6 +294,110 @@
         "p": 0.7807219278072193,
         "n": 369,
         "p_holm": 1.0
+      }
+    },
+    "primary|trained_embedder_rewriter_question - trained_embedder": {
+      "context_utility": {
+        "before": 3.3297872340425534,
+        "after": 3.3085106382978724,
+        "delta": -0.02127659574468085,
+        "lo": -0.07180851063829788,
+        "hi": 0.02925531914893617,
+        "p": 0.48225177482251774,
+        "n": 376,
+        "p_holm": 0.48225177482251774
+      },
+      "faithfulness": {
+        "before": 3.625,
+        "after": 3.3111702127659575,
+        "delta": -0.31382978723404253,
+        "lo": -0.4095744680851064,
+        "hi": -0.22074468085106383,
+        "p": 9.999000099990002e-05,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      },
+      "persona_alignment": {
+        "before": 3.6835106382978724,
+        "after": 3.4893617021276597,
+        "delta": -0.19414893617021275,
+        "lo": -0.2872340425531915,
+        "hi": -0.10106382978723404,
+        "p": 9.999000099990002e-05,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      },
+      "pedagogical_quality": {
+        "before": 3.050531914893617,
+        "after": 2.8351063829787235,
+        "delta": -0.2154255319148936,
+        "lo": -0.34574468085106386,
+        "hi": -0.0851063829787234,
+        "p": 0.0015998400159984002,
+        "n": 376,
+        "p_holm": 0.0031996800319968005
+      },
+      "answer_correctness": {
+        "before": 0.7553191489361702,
+        "after": 0.675531914893617,
+        "delta": -0.0797872340425532,
+        "lo": -0.12234042553191489,
+        "hi": -0.03723404255319149,
+        "p": 0.0007999200079992001,
+        "n": 376,
+        "p_holm": 0.0023997600239976003
+      }
+    },
+    "secondary|trained_embedder_rewriter_question - trained_embedder": {
+      "context_utility": {
+        "before": 3.227272727272727,
+        "after": 3.0775401069518717,
+        "delta": -0.1497326203208556,
+        "lo": -0.23796791443850268,
+        "hi": -0.06417112299465241,
+        "p": 0.000999900009999,
+        "n": 374,
+        "p_holm": 0.004999500049995
+      },
+      "faithfulness": {
+        "before": 3.7245989304812834,
+        "after": 3.6149732620320854,
+        "delta": -0.10962566844919786,
+        "lo": -0.21390374331550802,
+        "hi": -0.0106951871657754,
+        "p": 0.0405959404059594,
+        "n": 374,
+        "p_holm": 0.1217878212178782
+      },
+      "persona_alignment": {
+        "before": 3.6176470588235294,
+        "after": 3.5668449197860963,
+        "delta": -0.05080213903743316,
+        "lo": -0.1443850267379679,
+        "hi": 0.0427807486631016,
+        "p": 0.32536746325367466,
+        "n": 374,
+        "p_holm": 0.6507349265073493
+      },
+      "pedagogical_quality": {
+        "before": 3.443850267379679,
+        "after": 3.3957219251336896,
+        "delta": -0.0481283422459893,
+        "lo": -0.1497326203208556,
+        "hi": 0.05080213903743316,
+        "p": 0.39416058394160586,
+        "n": 374,
+        "p_holm": 0.6507349265073493
+      },
+      "answer_correctness": {
+        "before": 0.7700534759358288,
+        "after": 0.6978609625668449,
+        "delta": -0.07219251336898395,
+        "lo": -0.11497326203208556,
+        "hi": -0.03208556149732621,
+        "p": 0.0022997700229977,
+        "n": 374,
+        "p_holm": 0.0091990800919908
       }
     }
   },
@@ -482,6 +610,110 @@
         "p_holm": 0.29047095290470953
       }
     },
+    "primary|trained_embedder_base_rewriter_question - trained_embedder": {
+      "context_utility": {
+        "before": 3.3297872340425534,
+        "after": 3.327127659574468,
+        "delta": -0.0026595744680851063,
+        "lo": -0.05053191489361702,
+        "hi": 0.04521276595744681,
+        "p": 1.0,
+        "n": 376,
+        "p_holm": 1.0
+      },
+      "faithfulness": {
+        "before": 3.625,
+        "after": 3.3882978723404253,
+        "delta": -0.23670212765957446,
+        "lo": -0.3271276595744681,
+        "hi": -0.14627659574468085,
+        "p": 9.999000099990002e-05,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      },
+      "persona_alignment": {
+        "before": 3.6835106382978724,
+        "after": 3.4441489361702127,
+        "delta": -0.2393617021276596,
+        "lo": -0.32978723404255317,
+        "hi": -0.15425531914893617,
+        "p": 9.999000099990002e-05,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      },
+      "pedagogical_quality": {
+        "before": 3.050531914893617,
+        "after": 2.8377659574468086,
+        "delta": -0.2127659574468085,
+        "lo": -0.3324468085106383,
+        "hi": -0.09840425531914894,
+        "p": 0.00039996000399960006,
+        "n": 376,
+        "p_holm": 0.0007999200079992001
+      },
+      "answer_correctness": {
+        "before": 0.7553191489361702,
+        "after": 0.6835106382978723,
+        "delta": -0.07180851063829788,
+        "lo": -0.10904255319148937,
+        "hi": -0.034574468085106384,
+        "p": 0.00019998000199980003,
+        "n": 376,
+        "p_holm": 0.0005999400059994001
+      }
+    },
+    "primary|trained_embedder_rewriter_question - trained_embedder_base_rewriter_question": {
+      "context_utility": {
+        "before": 3.327127659574468,
+        "after": 3.3085106382978724,
+        "delta": -0.018617021276595744,
+        "lo": -0.06382978723404255,
+        "hi": 0.026595744680851064,
+        "p": 0.48925107489251074,
+        "n": 376,
+        "p_holm": 1.0
+      },
+      "faithfulness": {
+        "before": 3.3882978723404253,
+        "after": 3.3111702127659575,
+        "delta": -0.07712765957446809,
+        "lo": -0.17819148936170212,
+        "hi": 0.02127659574468085,
+        "p": 0.1367863213678632,
+        "n": 376,
+        "p_holm": 0.683931606839316
+      },
+      "persona_alignment": {
+        "before": 3.4441489361702127,
+        "after": 3.4893617021276597,
+        "delta": 0.04521276595744681,
+        "lo": -0.05851063829787234,
+        "hi": 0.14627659574468085,
+        "p": 0.42395760423957607,
+        "n": 376,
+        "p_holm": 1.0
+      },
+      "pedagogical_quality": {
+        "before": 2.8377659574468086,
+        "after": 2.8351063829787235,
+        "delta": -0.0026595744680851063,
+        "lo": -0.1276595744680851,
+        "hi": 0.1196808510638298,
+        "p": 1.0,
+        "n": 376,
+        "p_holm": 1.0
+      },
+      "answer_correctness": {
+        "before": 0.6835106382978723,
+        "after": 0.675531914893617,
+        "delta": -0.007978723404255319,
+        "lo": -0.050598404255319085,
+        "hi": 0.034574468085106384,
+        "p": 0.8162183781621838,
+        "n": 376,
+        "p_holm": 1.0
+      }
+    },
     "secondary|base_embedder - base_embedder_no_profile": {
       "context_utility": {
         "before": 2.8413978494623655,
@@ -689,6 +921,320 @@
         "n": 371,
         "p_holm": 0.8883111688831117
       }
+    },
+    "secondary|trained_embedder_base_rewriter_question - trained_embedder": {
+      "context_utility": {
+        "before": 3.227272727272727,
+        "after": 3.085561497326203,
+        "delta": -0.14171122994652408,
+        "lo": -0.21390374331550802,
+        "hi": -0.07219251336898395,
+        "p": 0.00019998000199980003,
+        "n": 374,
+        "p_holm": 0.000999900009999
+      },
+      "faithfulness": {
+        "before": 3.7245989304812834,
+        "after": 3.590909090909091,
+        "delta": -0.13368983957219252,
+        "lo": -0.24331550802139038,
+        "hi": -0.02406417112299465,
+        "p": 0.021597840215978402,
+        "n": 374,
+        "p_holm": 0.0647935206479352
+      },
+      "persona_alignment": {
+        "before": 3.6176470588235294,
+        "after": 3.5240641711229945,
+        "delta": -0.09358288770053476,
+        "lo": -0.18449197860962566,
+        "hi": -0.008021390374331552,
+        "p": 0.0448955104489551,
+        "n": 374,
+        "p_holm": 0.0897910208979102
+      },
+      "pedagogical_quality": {
+        "before": 3.443850267379679,
+        "after": 3.3449197860962565,
+        "delta": -0.09893048128342247,
+        "lo": -0.19518716577540107,
+        "hi": -0.0053475935828877,
+        "p": 0.049795020497950204,
+        "n": 374,
+        "p_holm": 0.0897910208979102
+      },
+      "answer_correctness": {
+        "before": 0.7700534759358288,
+        "after": 0.6951871657754011,
+        "delta": -0.0748663101604278,
+        "lo": -0.11236631016042775,
+        "hi": -0.0374331550802139,
+        "p": 0.0004999500049995,
+        "n": 374,
+        "p_holm": 0.001999800019998
+      }
+    },
+    "secondary|trained_embedder_rewriter_question - trained_embedder_base_rewriter_question": {
+      "context_utility": {
+        "before": 3.0797872340425534,
+        "after": 3.0718085106382977,
+        "delta": -0.007978723404255319,
+        "lo": -0.09840425531914894,
+        "hi": 0.08244680851063829,
+        "p": 0.9087091290870913,
+        "n": 376,
+        "p_holm": 1.0
+      },
+      "faithfulness": {
+        "before": 3.5930851063829787,
+        "after": 3.617021276595745,
+        "delta": 0.023936170212765957,
+        "lo": -0.08776595744680851,
+        "hi": 0.13297872340425532,
+        "p": 0.7061293870612939,
+        "n": 376,
+        "p_holm": 1.0
+      },
+      "persona_alignment": {
+        "before": 3.521276595744681,
+        "after": 3.5638297872340425,
+        "delta": 0.0425531914893617,
+        "lo": -0.047872340425531915,
+        "hi": 0.13297872340425532,
+        "p": 0.398960103989601,
+        "n": 376,
+        "p_holm": 1.0
+      },
+      "pedagogical_quality": {
+        "before": 3.3404255319148937,
+        "after": 3.390957446808511,
+        "delta": 0.05053191489361702,
+        "lo": -0.05053191489361702,
+        "hi": 0.14893617021276595,
+        "p": 0.35606439356064395,
+        "n": 376,
+        "p_holm": 1.0
+      },
+      "answer_correctness": {
+        "before": 0.6941489361702128,
+        "after": 0.6968085106382979,
+        "delta": 0.0026595744680851063,
+        "lo": -0.0398936170212766,
+        "hi": 0.04521276595744681,
+        "p": 1.0,
+        "n": 376,
+        "p_holm": 1.0
+      }
+    }
+  },
+  "question_side": {
+    "primary|trained_embedder_base_rewriter_question - trained_embedder_base_rewriter": {
+      "context_utility": {
+        "before": 3.1835106382978724,
+        "after": 3.327127659574468,
+        "delta": 0.14361702127659576,
+        "lo": 0.05319148936170213,
+        "hi": 0.2393617021276596,
+        "p": 0.004399560043995601,
+        "n": 376,
+        "p_holm": 0.013198680131986803
+      },
+      "faithfulness": {
+        "before": 3.6143617021276597,
+        "after": 3.3882978723404253,
+        "delta": -0.22606382978723405,
+        "lo": -0.31648936170212766,
+        "hi": -0.1356382978723404,
+        "p": 9.999000099990002e-05,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      },
+      "persona_alignment": {
+        "before": 3.625,
+        "after": 3.4441489361702127,
+        "delta": -0.18085106382978725,
+        "lo": -0.27393617021276595,
+        "hi": -0.09042553191489362,
+        "p": 0.00019998000199980003,
+        "n": 376,
+        "p_holm": 0.0007999200079992001
+      },
+      "pedagogical_quality": {
+        "before": 2.8856382978723403,
+        "after": 2.8377659574468086,
+        "delta": -0.047872340425531915,
+        "lo": -0.1702127659574468,
+        "hi": 0.07712765957446809,
+        "p": 0.46385361463853614,
+        "n": 376,
+        "p_holm": 0.5833416658334166
+      },
+      "answer_correctness": {
+        "before": 0.7074468085106383,
+        "after": 0.6835106382978723,
+        "delta": -0.023936170212765957,
+        "lo": -0.06382978723404255,
+        "hi": 0.015957446808510637,
+        "p": 0.2916708329167083,
+        "n": 376,
+        "p_holm": 0.5833416658334166
+      }
+    },
+    "secondary|trained_embedder_base_rewriter_question - trained_embedder_base_rewriter": {
+      "context_utility": {
+        "before": 3.0638297872340425,
+        "after": 3.0797872340425534,
+        "delta": 0.015957446808510637,
+        "lo": -0.08776595744680851,
+        "hi": 0.12234042553191489,
+        "p": 0.8017198280171983,
+        "n": 376,
+        "p_holm": 1.0
+      },
+      "faithfulness": {
+        "before": 3.726063829787234,
+        "after": 3.5930851063829787,
+        "delta": -0.13297872340425532,
+        "lo": -0.24202127659574468,
+        "hi": -0.026595744680851064,
+        "p": 0.017598240175982403,
+        "n": 376,
+        "p_holm": 0.08799120087991202
+      },
+      "persona_alignment": {
+        "before": 3.547872340425532,
+        "after": 3.521276595744681,
+        "delta": -0.026595744680851064,
+        "lo": -0.1196808510638298,
+        "hi": 0.06648936170212766,
+        "p": 0.6088391160883911,
+        "n": 376,
+        "p_holm": 1.0
+      },
+      "pedagogical_quality": {
+        "before": 3.3377659574468086,
+        "after": 3.3404255319148937,
+        "delta": 0.0026595744680851063,
+        "lo": -0.10106382978723404,
+        "hi": 0.10638297872340426,
+        "p": 1.0,
+        "n": 376,
+        "p_holm": 1.0
+      },
+      "answer_correctness": {
+        "before": 0.7313829787234043,
+        "after": 0.6941489361702128,
+        "delta": -0.03723404255319149,
+        "lo": -0.07712765957446809,
+        "hi": 0.0026595744680851063,
+        "p": 0.08839116088391161,
+        "n": 376,
+        "p_holm": 0.35356464353564643
+      }
+    },
+    "primary|trained_embedder_rewriter_question - trained_embedder_rewriter": {
+      "context_utility": {
+        "before": 3.2074468085106385,
+        "after": 3.3085106382978724,
+        "delta": 0.10106382978723404,
+        "lo": 0.0026595744680851063,
+        "hi": 0.20212765957446807,
+        "p": 0.054594540545945404,
+        "n": 376,
+        "p_holm": 0.10918908109189081
+      },
+      "faithfulness": {
+        "before": 3.606382978723404,
+        "after": 3.3111702127659575,
+        "delta": -0.29521276595744683,
+        "lo": -0.3882978723404255,
+        "hi": -0.2047872340425532,
+        "p": 9.999000099990002e-05,
+        "n": 376,
+        "p_holm": 0.0004999500049995
+      },
+      "persona_alignment": {
+        "before": 3.627659574468085,
+        "after": 3.4893617021276597,
+        "delta": -0.13829787234042554,
+        "lo": -0.23138297872340424,
+        "hi": -0.047872340425531915,
+        "p": 0.0040995900409959,
+        "n": 376,
+        "p_holm": 0.0122987701229877
+      },
+      "pedagogical_quality": {
+        "before": 2.9574468085106385,
+        "after": 2.8351063829787235,
+        "delta": -0.12234042553191489,
+        "lo": -0.2579787234042553,
+        "hi": 0.010638297872340425,
+        "p": 0.07939206079392061,
+        "n": 376,
+        "p_holm": 0.10918908109189081
+      },
+      "answer_correctness": {
+        "before": 0.75,
+        "after": 0.675531914893617,
+        "delta": -0.07446808510638298,
+        "lo": -0.11702127659574468,
+        "hi": -0.031914893617021274,
+        "p": 0.0014998500149985001,
+        "n": 376,
+        "p_holm": 0.0059994000599940004
+      }
+    },
+    "secondary|trained_embedder_rewriter_question - trained_embedder_rewriter": {
+      "context_utility": {
+        "before": 3.0215633423180592,
+        "after": 3.0646900269541777,
+        "delta": 0.0431266846361186,
+        "lo": -0.0646900269541779,
+        "hi": 0.15363881401617252,
+        "p": 0.46095390460953906,
+        "n": 371,
+        "p_holm": 1.0
+      },
+      "faithfulness": {
+        "before": 3.628032345013477,
+        "after": 3.6118598382749325,
+        "delta": -0.016172506738544475,
+        "lo": -0.1347708894878706,
+        "hi": 0.10512129380053908,
+        "p": 0.8251174882511749,
+        "n": 371,
+        "p_holm": 1.0
+      },
+      "persona_alignment": {
+        "before": 3.5849056603773586,
+        "after": 3.557951482479784,
+        "delta": -0.026954177897574125,
+        "lo": -0.1320754716981132,
+        "hi": 0.07816711590296496,
+        "p": 0.6397360263973603,
+        "n": 371,
+        "p_holm": 1.0
+      },
+      "pedagogical_quality": {
+        "before": 3.3557951482479784,
+        "after": 3.3827493261455523,
+        "delta": 0.026954177897574125,
+        "lo": -0.08086253369272237,
+        "hi": 0.1320754716981132,
+        "p": 0.6532346765323468,
+        "n": 371,
+        "p_holm": 1.0
+      },
+      "answer_correctness": {
+        "before": 0.7574123989218329,
+        "after": 0.692722371967655,
+        "delta": -0.0646900269541779,
+        "lo": -0.1078167115902965,
+        "hi": -0.0215633423180593,
+        "p": 0.006399360063993601,
+        "n": 371,
+        "p_holm": 0.031996800319968
+      }
     }
   },
   "per_persona": {
@@ -712,6 +1258,14 @@
     "trained_embedder_rewriter|persona_alignment|scholar": 3.765957446808511,
     "trained_embedder_rewriter|persona_alignment|steady": 3.606382978723404,
     "trained_embedder_rewriter|persona_alignment|newcomer": 3.521276595744681,
+    "trained_embedder_base_rewriter_question|persona_alignment|crammer": 3.648936170212766,
+    "trained_embedder_base_rewriter_question|persona_alignment|scholar": 3.351063829787234,
+    "trained_embedder_base_rewriter_question|persona_alignment|steady": 3.3191489361702127,
+    "trained_embedder_base_rewriter_question|persona_alignment|newcomer": 3.4574468085106385,
+    "trained_embedder_rewriter_question|persona_alignment|crammer": 3.6808510638297873,
+    "trained_embedder_rewriter_question|persona_alignment|scholar": 3.1914893617021276,
+    "trained_embedder_rewriter_question|persona_alignment|steady": 3.4574468085106385,
+    "trained_embedder_rewriter_question|persona_alignment|newcomer": 3.627659574468085,
     "base_embedder_no_profile|pedagogical_quality|crammer": 2.3617021276595747,
     "base_embedder_no_profile|pedagogical_quality|scholar": 2.425531914893617,
     "base_embedder_no_profile|pedagogical_quality|steady": 2.617021276595745,
@@ -732,6 +1286,14 @@
     "trained_embedder_rewriter|pedagogical_quality|scholar": 2.8085106382978724,
     "trained_embedder_rewriter|pedagogical_quality|steady": 3.0425531914893615,
     "trained_embedder_rewriter|pedagogical_quality|newcomer": 2.9468085106382977,
+    "trained_embedder_base_rewriter_question|pedagogical_quality|crammer": 3.0531914893617023,
+    "trained_embedder_base_rewriter_question|pedagogical_quality|scholar": 2.627659574468085,
+    "trained_embedder_base_rewriter_question|pedagogical_quality|steady": 2.8191489361702127,
+    "trained_embedder_base_rewriter_question|pedagogical_quality|newcomer": 2.851063829787234,
+    "trained_embedder_rewriter_question|pedagogical_quality|crammer": 3.0425531914893615,
+    "trained_embedder_rewriter_question|pedagogical_quality|scholar": 2.5319148936170213,
+    "trained_embedder_rewriter_question|pedagogical_quality|steady": 2.7872340425531914,
+    "trained_embedder_rewriter_question|pedagogical_quality|newcomer": 2.978723404255319,
     "base_embedder_no_profile|context_utility|crammer": 2.9361702127659575,
     "base_embedder_no_profile|context_utility|scholar": 2.872340425531915,
     "base_embedder_no_profile|context_utility|steady": 2.904255319148936,
@@ -751,29 +1313,47 @@
     "trained_embedder_rewriter|context_utility|crammer": 3.24468085106383,
     "trained_embedder_rewriter|context_utility|scholar": 3.1914893617021276,
     "trained_embedder_rewriter|context_utility|steady": 3.2127659574468086,
-    "trained_embedder_rewriter|context_utility|newcomer": 3.1808510638297873
+    "trained_embedder_rewriter|context_utility|newcomer": 3.1808510638297873,
+    "trained_embedder_base_rewriter_question|context_utility|crammer": 3.3404255319148937,
+    "trained_embedder_base_rewriter_question|context_utility|scholar": 3.351063829787234,
+    "trained_embedder_base_rewriter_question|context_utility|steady": 3.351063829787234,
+    "trained_embedder_base_rewriter_question|context_utility|newcomer": 3.265957446808511,
+    "trained_embedder_rewriter_question|context_utility|crammer": 3.372340425531915,
+    "trained_embedder_rewriter_question|context_utility|scholar": 3.276595744680851,
+    "trained_embedder_rewriter_question|context_utility|steady": 3.3191489361702127,
+    "trained_embedder_rewriter_question|context_utility|newcomer": 3.265957446808511
   },
   "retrieval_shift": {
     "overlap|base_embedder vs base_embedder_no_profile": 0.7659574468085106,
     "overlap|trained_embedder vs base_embedder": 0.6117021276595744,
     "overlap|trained_embedder_base_rewriter vs trained_embedder": 0.7654255319148936,
     "overlap|trained_embedder_rewriter vs trained_embedder_base_rewriter": 0.6808510638297872,
+    "overlap|trained_embedder_base_rewriter_question vs trained_embedder": 1.0,
+    "overlap|trained_embedder_rewriter_question vs trained_embedder_base_rewriter_question": 1.0,
     "zero_context_utility|base_embedder_no_profile": 0.18351063829787234,
     "zero_context_utility|base_embedder": 0.17553191489361702,
     "zero_context_utility|trained_embedder": 0.08244680851063829,
     "zero_context_utility|trained_embedder_base_rewriter": 0.10638297872340426,
     "zero_context_utility|trained_embedder_rewriter": 0.11436170212765957,
+    "zero_context_utility|trained_embedder_base_rewriter_question": 0.07180851063829788,
+    "zero_context_utility|trained_embedder_rewriter_question": 0.08776595744680851,
     "distinct_hitsets|base_embedder_no_profile": 1.0,
     "distinct_hitsets|base_embedder": 2.8617021276595747,
     "distinct_hitsets|trained_embedder": 2.1382978723404253,
     "distinct_hitsets|trained_embedder_base_rewriter": 3.0638297872340425,
-    "distinct_hitsets|trained_embedder_rewriter": 3.25531914893617
+    "distinct_hitsets|trained_embedder_rewriter": 3.25531914893617,
+    "distinct_hitsets|trained_embedder_base_rewriter_question": 2.1382978723404253,
+    "distinct_hitsets|trained_embedder_rewriter_question": 2.1382978723404253
   },
   "rewriter_mechanism": {
     "token_fidelity_mean|trained_embedder_base_rewriter": 0.8027353638063776,
     "token_fidelity_below_cut|trained_embedder_base_rewriter": 0.05053191489361702,
     "token_fidelity_mean|trained_embedder_rewriter": 0.6110000916302814,
     "token_fidelity_below_cut|trained_embedder_rewriter": 0.11702127659574468,
+    "token_fidelity_mean|trained_embedder_base_rewriter_question": 0.8027353638063776,
+    "token_fidelity_below_cut|trained_embedder_base_rewriter_question": 0.05053191489361702,
+    "token_fidelity_mean|trained_embedder_rewriter_question": 0.6110000916302814,
+    "token_fidelity_below_cut|trained_embedder_rewriter_question": 0.11702127659574468,
     "context_utility_by_fidelity|trained_embedder_base_rewriter": {
       "below": 2.6842105263157894,
       "at_or_above": 3.2100840336134455
@@ -782,12 +1362,28 @@
       "below": 2.75,
       "at_or_above": 3.2680722891566263
     },
+    "context_utility_by_fidelity|trained_embedder_base_rewriter_question": {
+      "below": 3.1578947368421053,
+      "at_or_above": 3.3361344537815127
+    },
+    "context_utility_by_fidelity|trained_embedder_rewriter_question": {
+      "below": 3.4318181818181817,
+      "at_or_above": 3.2921686746987953
+    },
     "context_utility|trained_embedder": 3.3297872340425534,
     "persona_word_rate|trained_embedder_base_rewriter": {
       "grade nine": 0.0026595744680851063,
       "exam": 0.010638297872340425
     },
     "persona_word_rate|trained_embedder_rewriter": {
+      "grade nine": 0.22606382978723405,
+      "exam": 0.21010638297872342
+    },
+    "persona_word_rate|trained_embedder_base_rewriter_question": {
+      "grade nine": 0.0026595744680851063,
+      "exam": 0.010638297872340425
+    },
+    "persona_word_rate|trained_embedder_rewriter_question": {
       "grade nine": 0.22606382978723405,
       "exam": 0.21010638297872342
     }
@@ -813,6 +1409,16 @@
       "tie": 289,
       "loss": 42
     },
+    "context_utility|trained_embedder_base_rewriter_question - trained_embedder": {
+      "win": 27,
+      "tie": 320,
+      "loss": 29
+    },
+    "context_utility|trained_embedder_rewriter_question - trained_embedder_base_rewriter_question": {
+      "win": 28,
+      "tie": 317,
+      "loss": 31
+    },
     "persona_alignment|base_embedder - base_embedder_no_profile": {
       "win": 111,
       "tie": 231,
@@ -833,6 +1439,16 @@
       "tie": 277,
       "loss": 50
     },
+    "persona_alignment|trained_embedder_base_rewriter_question - trained_embedder": {
+      "win": 29,
+      "tie": 264,
+      "loss": 83
+    },
+    "persona_alignment|trained_embedder_rewriter_question - trained_embedder_base_rewriter_question": {
+      "win": 75,
+      "tie": 235,
+      "loss": 66
+    },
     "pedagogical_quality|base_embedder - base_embedder_no_profile": {
       "win": 135,
       "tie": 200,
@@ -852,40 +1468,50 @@
       "win": 78,
       "tie": 229,
       "loss": 69
+    },
+    "pedagogical_quality|trained_embedder_base_rewriter_question - trained_embedder": {
+      "win": 59,
+      "tie": 227,
+      "loss": 90
+    },
+    "pedagogical_quality|trained_embedder_rewriter_question - trained_embedder_base_rewriter_question": {
+      "win": 79,
+      "tie": 218,
+      "loss": 79
     }
   },
   "judge_agreement": {
     "agreement|context_utility": {
-      "exact": 0.8164794007490637,
-      "pearson_r": 0.8891679266340238,
-      "n": 1869
+      "exact": 0.7916825639069057,
+      "pearson_r": 0.8704556315517262,
+      "n": 2621
     },
     "agreement|faithfulness": {
-      "exact": 0.7228464419475655,
-      "pearson_r": 0.4259636952271613,
-      "n": 1869
+      "exact": 0.6615795497901564,
+      "pearson_r": 0.4231210002261335,
+      "n": 2621
     },
     "agreement|persona_alignment": {
-      "exact": 0.7164258962011771,
-      "pearson_r": 0.6478683148766659,
-      "n": 1869
+      "exact": 0.7169019458222052,
+      "pearson_r": 0.6566781067509737,
+      "n": 2621
     },
     "agreement|pedagogical_quality": {
-      "exact": 0.6035313001605136,
-      "pearson_r": 0.8158541736344862,
-      "n": 1869
+      "exact": 0.5959557420831744,
+      "pearson_r": 0.8069150897274526,
+      "n": 2621
     },
     "agreement|answer_correctness": {
-      "exact": 0.9609416800428037,
-      "pearson_r": 0.904496611354969,
-      "n": 1869
+      "exact": 0.9538344143456696,
+      "pearson_r": 0.8889269835826998,
+      "n": 2621
     },
-    "delta_agreement_pearson_r": 0.877486142990581,
-    "delta_sign_agreement": 0.75,
-    "judge_bias|context_utility": -0.12199036918138041,
-    "judge_bias|faithfulness": 0.06902086677367576,
-    "judge_bias|persona_alignment": -0.05831995719636169,
-    "judge_bias|pedagogical_quality": 0.44141252006420545,
-    "judge_bias|answer_correctness": 0.01658640984483681
+    "delta_agreement_pearson_r": 0.8566276597280814,
+    "delta_sign_agreement": 0.7333333333333333,
+    "judge_bias|context_utility": -0.1564288439526898,
+    "judge_bias|faithfulness": 0.12247233880198398,
+    "judge_bias|persona_alignment": -0.019839755818389926,
+    "judge_bias|pedagogical_quality": 0.46661579549790155,
+    "judge_bias|answer_correctness": 0.016405951926745516
   }
 }
